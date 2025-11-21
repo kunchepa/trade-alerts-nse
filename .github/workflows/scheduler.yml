@@ -2,7 +2,7 @@ name: Trade Alerts Scheduler
 
 on:
   schedule:
-    - cron: "*/15 3-10,10 * * 1-5"  # Every 15 mins, Mon–Fri, 8:30am–4:00pm IST
+    - cron: "*/15 3-10,10 * * 1-5"  # Every 15 mins, Mon–Fri, 8:30am–4:00pm IST new
   workflow_dispatch:
 
 jobs:
@@ -28,3 +28,4 @@ jobs:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
         run: npm start
+
