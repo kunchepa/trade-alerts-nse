@@ -2,7 +2,7 @@ name: Trade Alerts Scheduler
 
 on:
   schedule:
-    - cron: "*/15 * 9-20 * *"  # Every 15 mins, Mon–Fri, 9:00am–8:00pm IST
+    - cron: "*/15 * 9-20 * *"
   workflow_dispatch:
 
 jobs:
