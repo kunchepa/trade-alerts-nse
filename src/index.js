@@ -3,7 +3,6 @@ import { GoogleAuth } from "google-auth-library";
 import { google } from "googleapis";
 import { EMA, ADX, ATR } from "technicalindicators";
 
-// Load secrets from environment
 const {
   TELEGRAM_BOT_TOKEN,
   TELEGRAM_CHAT_ID,
@@ -11,17 +10,14 @@ const {
   SPREADSHEET_ID,
 } = process.env;
 
-// Parse service account JSON
 const credentials = JSON.parse(GOOGLE_SERVICE_ACCOUNT_JSON);
 
-// Setup Google Sheets API
 const auth = new GoogleAuth({
   credentials,
   scopes: ["https://www.googleapis.com/auth/spreadsheets"],
 });
 const sheets = google.sheets({ version: "v4", auth });
 
-// Utility: Send Telegram alert
 async function sendTelegram(message) {
   const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
   await axios.post(url, {
@@ -31,7 +27,6 @@ async function sendTelegram(message) {
   });
 }
 
-// Utility: Write row to Google Sheet
 async function writeToSheet(row) {
   await sheets.spreadsheets.values.append({
     spreadsheetId: SPREADSHEET_ID,
@@ -41,7 +36,6 @@ async function writeToSheet(row) {
   });
 }
 
-// Strategy: Apply filters to stock data
 function applyStrategy(data) {
   const close = data.map(d => d.close);
   const high = data.map(d => d.high);
@@ -63,7 +57,6 @@ function applyStrategy(data) {
   return orbBreakout && volumeSpike && emaSupport && strongTrend;
 }
 
-// NSE100 stock list
 const symbols = [
   "RELIANCE", "INFY", "TCS", "HDFCBANK", "ICICIBANK", "LT", "SBIN", "HINDUNILVR", "BHARTIARTL", "ITC",
   "KOTAKBANK", "ASIANPAINT", "AXISBANK", "MARUTI", "SUNPHARMA", "BAJFINANCE", "HCLTECH", "WIPRO", "NTPC", "TECHM",
@@ -77,7 +70,6 @@ const symbols = [
   "NBCC", "RVNL", "RITES", "BHEL", "IOCL", "SAIL"
 ];
 
-// Main: Run alerts
 async function run() {
   for (const symbol of symbols) {
     try {
@@ -106,3 +98,4 @@ async function run() {
 }
 
 run();
+
