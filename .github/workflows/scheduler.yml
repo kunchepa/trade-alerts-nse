@@ -18,10 +18,8 @@ jobs:
         with:
           node-version: "18"
 
-      - name: Force npm and install dependencies
-        run: |
-          corepack disable
-          npm install
+      - name: Install dependencies
+        run: npm install
 
       - name: Run trade alert system
         env:
@@ -30,4 +28,3 @@ jobs:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
         run: npm start
-
