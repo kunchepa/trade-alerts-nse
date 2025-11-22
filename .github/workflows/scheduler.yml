@@ -2,10 +2,8 @@ name: Trade Alerts Scheduler
 
 on:
   schedule:
-    # Run every 5 minutes from 9:00 AM to 4:00 PM IST (UTC 03:30 to 10:30)
-    - cron: "30-59/5 3 * * *"   # 09:00–09:29 IST
-    - cron: "*/5 4-9 * * *"     # 09:30–15:29 IST
-    - cron: "0-30/5 10 * * *"   # 15:30–16:00 IST
+    # Run every 5 minutes from 09:00 AM to 04:00 PM IST (03:30 to 10:30 UTC)
+    - cron: "*/5 3-10 * * *"
   workflow_dispatch:
 
 jobs:
@@ -15,7 +13,7 @@ jobs:
     steps:
       # Step 1 – Checkout repo
       - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       # Step 2 – Setup Node.js
       - name: Setup Node.js
@@ -23,7 +21,7 @@ jobs:
         with:
           node-version: "20"
 
-      # Step 3 – Remove old lock file if exists
+      # Step 3 – Remove old lock file
       - name: Remove old lock file if exists
         run: rm -f package-lock.json
 
