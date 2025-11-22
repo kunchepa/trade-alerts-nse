@@ -2,7 +2,7 @@ name: Trade Alerts Scheduler
 
 on:
   schedule:
-    - cron: "*/15 3-12 * * *"   # every 15 mins between 8:30am - 5:30pm IST
+    - cron: "*/15 3-12 * * *"
   workflow_dispatch:
 
 jobs:
@@ -19,8 +19,14 @@ jobs:
           node-version: "20"
           cache: "npm"
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Remove old lock file if exists
+        run: rm -f package-lock.json
+
+      - name: Clean NPM cache
+        run: npm cache clean --force
+
+      - name: Install fresh dependencies (NO CACHE)
+        run: npm install --force
 
       - name: Run trade alert system
         env:
