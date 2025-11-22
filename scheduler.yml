@@ -2,7 +2,7 @@ name: Trade Alerts Scheduler
 
 on:
   schedule:
-    - cron: "*/15 * 9-20 * *"
+    - cron: "*/15 9-20 * * *"   # Every 15 min between 9 to 20
   workflow_dispatch:
 
 jobs:
@@ -17,9 +17,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: "npm"
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Run trade alert system
         env:
