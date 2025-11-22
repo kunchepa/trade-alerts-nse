@@ -2,8 +2,8 @@ name: Trade Alerts Scheduler
 
 on:
   schedule:
-    # Run every 5 minutes between 9:30 AM – 3:30 PM IST  (4–10 UTC)
-    - cron: "*/5 4-10 * * *"
+    # Run every 5 minutes from 9:00 AM to 4:00 PM IST (approx)
+    - cron: "*/5 3-10 * * *"
   workflow_dispatch:
 
 jobs:
@@ -11,31 +11,23 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1 – Checkout repo
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Step 2 – Setup Node.js (no cache to avoid lock file issue)
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: "false"
-          cache-dependency-path: ""
 
-      # Step 3 – Remove old lock file if exists
       - name: Remove old lock file if exists
         run: rm -f package-lock.json
 
-      # Step 4 – Clean NPM cache
       - name: Clean NPM cache
         run: npm cache clean --force
 
-      # Step 5 – Install fresh dependencies
       - name: Install dependencies
         run: npm install --force
 
-      # Step 6 – Run the trade alert system
       - name: Run trade alert system
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
