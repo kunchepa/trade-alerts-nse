@@ -10,30 +10,29 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1 — Checkout repo
+      # Step 1 – Checkout repo
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Step 2 — Setup Node (NO CACHE)
+      # Step 2 – Setup Node.js
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: "false"
 
-      # Step 3 — (Optional) Remove old lock file
+      # Step 3 – Remove old lock file if exists
       - name: Remove old lock file if exists
         run: rm -f package-lock.json
 
-      # Step 4 — Clean NPM cache
+      # Step 4 – Clean NPM cache
       - name: Clean NPM cache
         run: npm cache clean --force
 
-      # Step 5 — Install fresh packages
+      # Step 5 – Install fresh dependencies
       - name: Install dependencies
         run: npm install --force
 
-      # Step 6 — Run the alert script
+      # Step 6 – Run the trade alert system
       - name: Run trade alert system
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
