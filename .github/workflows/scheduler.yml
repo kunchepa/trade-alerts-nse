@@ -2,7 +2,8 @@ name: Trade Alerts Scheduler
 
 on:
   schedule:
-    - cron: "*/15 3-12 * * *"
+    # Run every 5 minutes between 9:30 AM – 3:30 PM IST  (4–10 UTC)
+    - cron: "*/5 4-10 * * *"
   workflow_dispatch:
 
 jobs:
@@ -14,11 +15,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Step 2 – Setup Node.js
+      # Step 2 – Setup Node.js (no cache to avoid lock file issue)
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: "false"
+          cache-dependency-path: ""
 
       # Step 3 – Remove old lock file if exists
       - name: Remove old lock file if exists
