@@ -1,16 +1,18 @@
 {
   "name": "trade-alerts-nse",
   "version": "1.0.0",
-  "description": "Automated trade alerts for NSE100 stocks using EMA/ADX/ATR, Yahoo Finance, Telegram + Google Sheets",
+  "description": "Automated trade alerts for NSE100 stocks with EMA, ADX, ATR, WinRate, Risk sizing",
   "main": "src/index.js",
   "type": "module",
   "scripts": {
     "start": "node src/index.js"
   },
   "dependencies": {
-    "node-fetch": "^3.4.1",
-    "yahoo-finance2": "^3.7.0",
+    "axios": "^1.6.7",
+    "googleapis": "^133.0.0",
+    "google-auth-library": "^9.0.0",
     "technicalindicators": "^3.1.0",
-    "googleapis": "^133.0.0"
+    "yahoo-finance2": "^3.0.0",
+    "node-fetch": "^3.3.2"
   }
 }
