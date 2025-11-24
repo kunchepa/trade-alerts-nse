@@ -1,10 +1,17 @@
 name: Trade Alerts Scheduler
 
 on:
+  # INTERNAL GITHUB CRON (still works)
   schedule:
     # Run every 5 minutes from 08:30 AM to 04:30 PM IST (03:00 to 11:00 UTC)
     - cron: "*/5 3-11 * * *"
+
+  # MANUAL RUN BUTTON
   workflow_dispatch:
+
+  # EXTERNAL TRIGGER (Option D)
+  repository_dispatch:
+    types: [external_trigger]
 
 jobs:
   trade-alert:
