@@ -1,42 +1,38 @@
 name: Trade Alerts Scheduler
 
 on:
+  schedule:
+    - cron: "*/5 * * * *"   # every 5 minutes
   workflow_dispatch:
-  repository_dispatch:
-    types: [external_trigger]
 
 jobs:
   trade-alert:
     runs-on: ubuntu-latest
 
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+      SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+      SHEET_NAME: Alerts
+      DRY_RUN: 'false'
+      TEST_LIMIT: ''        # use for testing locally or in CI (e.g., 10)
+      CONCURRENCY: 6
+      RETRIES: 2
+      ADX_THRESHOLD: 23
+      VOLUME_MULTIPLIER: 1.5
+
     steps:
-      # Step 1 — Checkout repo
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      # Step 2 — Setup Node.js
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: 20
 
-      # Step 3 — Remove old lockfile
-      - name: Remove package-lock.json
-        run: rm -f package-lock.json
-
-      # Step 4 — Clean NPM Cache
-      - name: Clean NPM cache
-        run: npm cache clean --force
-
-      # Step 5 — Install dependencies
       - name: Install dependencies
-        run: npm install --force
+        run: npm ci
 
-      # Step 6 — Run Trade Alert System
-      - name: Run trade alert system
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
-          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-          SPREADSHEET_ID:     ${{ secrets.SPREADSHEET_ID }}
+      - name: Run Scanner
         run: npm start
