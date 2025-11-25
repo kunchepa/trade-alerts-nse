@@ -10,36 +10,33 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1 – Checkout repo
+      # Step 1 — Checkout repo
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Step 2 – Setup Node
+      # Step 2 — Setup Node.js
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      # Step 3 – Clean NPM
-      - name: Remove old lock file
+      # Step 3 — Remove old lockfile
+      - name: Remove package-lock.json
         run: rm -f package-lock.json
 
+      # Step 4 — Clean NPM Cache
       - name: Clean NPM cache
         run: npm cache clean --force
 
-      # Step 4 – Install dependencies
+      # Step 5 — Install dependencies
       - name: Install dependencies
         run: npm install --force
 
-      # Step 5 – Run trade alert system
+      # Step 6 — Run Trade Alert System
       - name: Run trade alert system
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-          ACCOUNT_CAPITAL: ${{ secrets.ACCOUNT_CAPITAL }}
-          RISK_PCT: ${{ secrets.RISK_PCT }}
-          SL_ATR_MULTIPLIER: ${{ secrets.SL_ATR_MULTIPLIER }}
-          TP_ATR_MULTIPLIER: ${{ secrets.TP_ATR_MULTIPLIER }}
+          SPREADSHEET_ID:     ${{ secrets.SPREADSHEET_ID }}
         run: npm start
