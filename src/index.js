@@ -1,16 +1,9 @@
 /**
  * ORB 30-minute Strategy
- * Conditions:
- * 1. Price breaks above ORB High  → BUY
- *    (EMA20 > EMA50, ADX > 23, Volume spike)
- *
- * 2. Price breaks below ORB Low   → SELL
- *    (EMA20 < EMA50, ADX > 23, Volume spike)
- *
- * Script runs ONCE (GitHub CRON triggers every 5 mins)
+ * Enhanced NSE Trade Scanner (YahooFinance v3 FIXED)
  */
 
-import { YahooFinance } from "yahoo-finance2";
+import yahooFinance from "yahoo-finance2";
 import axios from "axios";
 import pLimit from "p-limit";
 import pRetry from "p-retry";
@@ -19,9 +12,7 @@ import { ADX } from "technicalindicators";
 import fs from "fs";
 import path from "path";
 
-const yahooFinance = new YahooFinance();
-
-// ====== ENV ======
+// ===== ENV =====
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const GOOGLE_SERVICE_ACCOUNT_JSON = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
@@ -35,7 +26,7 @@ const RETRIES = 2;
 const ADX_THRESHOLD = 23;
 const VOLUME_MULTIPLIER = 1.5;
 
-// ====== TOP 100 NSE STOCKS ======
+// ===== SYMBOLS =====
 const symbols = [
   "RELIANCE","TCS","HDFCBANK","INFY","HDFC","ICICIBANK","KOTAKBANK","LT","SBIN","AXISBANK",
   "BAJFINANCE","BHARTIARTL","ITC","HINDUNILVR","MARUTI","SUNPHARMA","BAJAJFINSV","ASIANPAINT",
@@ -49,9 +40,9 @@ const symbols = [
   "AARTIIND","APOLLOHOSP","CENTURYTEX","BIOCON","ZEEL"
 ];
 
-// ====== Logging ======
+// ===== Logging =====
 const logsDir = path.join(process.cwd(), "logs");
-if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
+if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir);
 
 function log(msg) {
   const line = `${new Date().toISOString()} ${msg}\n`;
@@ -59,47 +50,44 @@ function log(msg) {
   console.log(msg);
 }
 
-// ====== Helpers ======
+// ===== Helpers =====
 function toIST(ts) {
   const d = new Date(ts);
-  const utc = d.getTime() + (d.getTimezoneOffset() * 60000);
-  return new Date(utc + (5.5 * 3600 * 1000));
+  return new Date(d.getTime() + (5.5 * 3600 * 1000));
 }
 
 function isMarketOpen() {
   const now = toIST(Date.now());
-  const h = now.getHours();
-  const m = now.getMinutes();
-  const hm = h + m/60;
+  const hm = now.getHours() + now.getMinutes() / 60;
   return hm >= 9.25 && hm <= 15.5;
 }
 
 function computeEMA(values, period) {
   if (values.length < period) return null;
-  const k = 2/(period+1);
-  let ema = values.slice(0,period).reduce((a,b)=>a+b)/period;
-
-  for (let i=period; i<values.length; i++) {
-    ema = values[i]*k + ema*(1-k);
-  }
+  const k = 2 / (period + 1);
+  let ema = values.slice(0, period).reduce((a,b)=>a+b) / period;
+  for (let i = period; i < values.length; i++)
+    ema = values[i] * k + ema * (1 - k);
   return ema;
 }
 
-// ====== Telegram ======
+// ===== Telegram =====
 async function sendTelegram(msg) {
   if (DRY_RUN) return log("[DRY_RUN] Telegram: " + msg);
-  if (!TELEGRAM_BOT_TOKEN) return log("Telegram disabled");
+  if (!TELEGRAM_BOT_TOKEN) return;
+
+  const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
   try {
-    const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
     await axios.post(url, { chat_id: TELEGRAM_CHAT_ID, text: msg, parse_mode: "HTML" });
   } catch (err) {
     log("Telegram error: " + err.message);
   }
 }
 
-// ====== Google Sheets ======
+// ===== Google Sheets =====
 async function appendSheet(row) {
-  if (DRY_RUN) return log("[DRY_RUN] Sheets row: " + JSON.stringify(row));
+  if (DRY_RUN) return log("[DRY_RUN] Sheets: " + JSON.stringify(row));
+
   try {
     const creds = JSON.parse(GOOGLE_SERVICE_ACCOUNT_JSON);
     const client = new google.auth.JWT(
@@ -110,6 +98,7 @@ async function appendSheet(row) {
     );
 
     await client.authorize();
+
     const sheets = google.sheets({ version: "v4", auth: client });
 
     await sheets.spreadsheets.values.append({
@@ -123,20 +112,19 @@ async function appendSheet(row) {
   }
 }
 
-// ====== Extract OHLCV ======
+// ===== Extract OHLCV =====
 function extractBars(chart) {
   const r = chart?.result?.[0];
   if (!r) return [];
 
   const q = r.indicators?.quote?.[0];
-  const timestamps = r.timestamp || [];
+  const ts = r.timestamp || [];
 
   const bars = [];
-  for (let i=0; i<timestamps.length; i++) {
+  for (let i = 0; i < ts.length; i++) {
     if (!q.close[i]) continue;
-
     bars.push({
-      ts: timestamps[i] * 1000,
+      ts: ts[i] * 1000,
       open: q.open[i],
       high: q.high[i],
       low: q.low[i],
@@ -147,23 +135,23 @@ function extractBars(chart) {
   return bars;
 }
 
-// ====== ORB 30m ======
+// ===== ORB 30m =====
 function getORB30(bars) {
-  const rangeBars = bars.filter(b => {
+  const orbBars = bars.filter(b => {
     const t = toIST(b.ts);
-    const hm = t.getHours() + t.getMinutes()/60;
-    return hm >= 9.25 && hm < 9.75; // 9:15–9:45
+    const hm = t.getHours() + t.getMinutes() / 60;
+    return hm >= 9.25 && hm < 9.75;
   });
 
-  if (!rangeBars.length) return null;
+  if (!orbBars.length) return null;
 
-  const high = Math.max(...rangeBars.map(b => b.high));
-  const low = Math.min(...rangeBars.map(b => b.low));
-
-  return { high, low };
+  return {
+    high: Math.max(...orbBars.map(b => b.high)),
+    low: Math.min(...orbBars.map(b => b.low))
+  };
 }
 
-// ====== MAIN per SYMBOL ======
+// ===== Main PER symbol =====
 async function processSymbol(symbol) {
   log(`→ ${symbol}`);
 
@@ -185,21 +173,24 @@ async function processSymbol(symbol) {
     const ema20 = computeEMA(closes, 20);
     const ema50 = computeEMA(closes, 50);
 
-    const adxVal = ADX.calculate({
+    const adxSeries = ADX.calculate({
       high: highs.slice(-100),
       low: lows.slice(-100),
       close: closes.slice(-100),
       period: 14
-    }).pop()?.adx || null;
+    });
 
-    const avgVol20 = vols.slice(-20).reduce((a,b)=>a+b,0)/20;
-    const lastVol = vols[vols.length-1];
+    const adxVal = adxSeries.pop()?.adx || null;
+
+    const avgVol20 = vols.slice(-20).reduce((a,b)=>a+b,0) / 20;
+    const lastVol = vols[vols.length - 1];
     const volSpike = lastVol >= avgVol20 * VOLUME_MULTIPLIER;
 
-    const lastPrice = closes[closes.length-1];
+    const price = closes[closes.length - 1];
 
-    const brokeHigh = lastPrice > orb.high;
-    const brokeLow = lastPrice < orb.low;
+    const brokeHigh = price > orb.high;
+    const brokeLow = price < orb.low;
+
     const upTrend = ema20 > ema50;
     const downTrend = ema20 < ema50;
 
@@ -216,9 +207,9 @@ async function processSymbol(symbol) {
     const msg =
       `📈 <b>${signal} SIGNAL</b>\n` +
       `Symbol: <b>${symbol}</b>\n` +
-      `Price: <b>${lastPrice}</b>\n` +
-      `ORB HIGH/LOW: <b>${orb.high}/${orb.low}</b>\n` +
-      `EMA20/EMA50: <b>${ema20.toFixed(2)} / ${ema50.toFixed(2)}</b>\n` +
+      `Price: <b>${price}</b>\n` +
+      `ORB H/L: <b>${orb.high} / ${orb.low}</b>\n` +
+      `EMA20/50: <b>${ema20.toFixed(2)} / ${ema50.toFixed(2)}</b>\n` +
       `ADX: <b>${adxVal.toFixed(2)}</b>\n` +
       `Volume Spike: <b>${volSpike}</b>`;
 
@@ -228,7 +219,7 @@ async function processSymbol(symbol) {
       new Date().toISOString(),
       symbol,
       signal,
-      lastPrice,
+      price,
       ema20.toFixed(2),
       ema50.toFixed(2),
       adxVal.toFixed(2),
@@ -240,7 +231,7 @@ async function processSymbol(symbol) {
   }
 }
 
-// ====== MAIN SCANNER ======
+// ===== MAIN SCANNER =====
 async function run() {
   log("=== Scanner Started ===");
 
