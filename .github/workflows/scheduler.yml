@@ -2,7 +2,7 @@ name: Trade Alerts Scheduler
 
 on:
   schedule:
-    - cron: "*/5 * * * *"   # every 5 minutes
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 jobs:
@@ -16,11 +16,6 @@ jobs:
       SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
       SHEET_NAME: Alerts
       DRY_RUN: 'false'
-      TEST_LIMIT: ''        # use for testing locally or in CI (e.g., 10)
-      CONCURRENCY: 6
-      RETRIES: 2
-      ADX_THRESHOLD: 23
-      VOLUME_MULTIPLIER: 1.5
 
     steps:
       - name: Checkout
@@ -32,7 +27,7 @@ jobs:
           node-version: 20
 
       - name: Install dependencies
-        run: npm ci
+        run: npm install
 
       - name: Run Scanner
         run: npm start
