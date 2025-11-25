@@ -1,12 +1,17 @@
 {
-  "name":"trade-alerts-nse",
-  "version":"1.0.0",
-  "type":"module",
-  "scripts": { "start": "node index.js" },
+  "name": "trade-alerts-nse",
+  "version": "1.0.0",
+  "description": "Automated trade alerts for NSE stocks using yahoo-finance v3",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js"
+  },
   "dependencies": {
-    "yahoo-finance2": "^3.0.0",
-    "technicalindicators": "^3.1.0",
+    "axios": "^1.6.7",
     "googleapis": "^133.0.0",
-    "axios": "^1.6.7"
+    "google-auth-library": "^9.0.0",
+    "technicalindicators": "^3.1.0",
+    "yahoo-finance2": "^3.0.0"
   }
 }
