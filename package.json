@@ -5,8 +5,7 @@
   "main": "src/index.js",
   "type": "module",
   "scripts": {
-    "start": "node src/index.js",
-    "update-symbols": "node src/updateSymbols.js"
+    "start": "node src/index.js"
   },
   "dependencies": {
     "axios": "^1.6.7",
@@ -15,7 +14,6 @@
     "p-retry": "^5.0.0",
     "p-limit": "^4.0.0",
     "technicalindicators": "^3.1.0",
-    "yahoo-finance2": "^3.0.0",
-    "winston": "^3.8.2"
+    "yahoo-finance2": "^3.0.0"
   }
 }
