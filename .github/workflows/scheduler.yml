@@ -1,9 +1,7 @@
 name: Trade Alerts Scheduler
 
 on:
-  schedule:
-    - cron: "*/5 * * * *"
-  workflow_dispatch:
+  workflow_dispatch:  # ONLY manual or external trigger
 
 jobs:
   trade-alert:
@@ -15,12 +13,6 @@ jobs:
       GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
       SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
       SHEET_NAME: Alerts
-      DRY_RUN: 'false'
-      TEST_LIMIT: '' 
-      CONCURRENCY: 6
-      RETRIES: 2
-      ADX_THRESHOLD: 20
-      VOLUME_MULTIPLIER: 1.3
 
     steps:
       - name: Checkout
@@ -33,9 +25,6 @@ jobs:
 
       - name: Install dependencies
         run: npm install
-
-      - name: Update symbols (best-effort)
-        run: node src/updateSymbols.js || true
 
       - name: Run Scanner
         run: npm start
