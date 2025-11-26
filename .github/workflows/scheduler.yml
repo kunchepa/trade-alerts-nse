@@ -1,20 +1,16 @@
 name: Trade Alerts Scheduler
 
 on:
-  # Runs every 5 minutes during market hours (08:30–16:30 IST = 03:00–11:00 UTC)
   schedule:
     - cron: "*/5 3-11 * * *"
-
-  # Allow manual execution
   workflow_dispatch:
-
-  # Allow external trigger from cron-job.org
   repository_dispatch:
     types: [external_trigger]
 
 jobs:
   run-scanner:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -27,13 +23,7 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      # Optional — auto-refresh symbols.json
-      # This runs only for scheduled and external triggers
-      - name: Update symbols list
-        if: github.event_name != 'workflow_dispatch'
-        run: node src/updateSymbols.js
-
-      - name: Run NSE Scanner
+      - name: Run Scanner
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
