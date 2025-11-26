@@ -1,8 +1,9 @@
 {
   "name": "trade-alerts-nse",
-  "version": "1.2.0",
+  "version": "2.0.0",
   "type": "module",
   "dependencies": {
+    "axios": "^1.6.0",
     "yahoo-finance2": "^2.14.1",
     "technicalindicators": "^3.0.0",
     "googleapis": "^105.0.0",
