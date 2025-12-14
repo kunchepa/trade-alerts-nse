@@ -32,10 +32,10 @@ const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 const SHEET_NAME = process.env.SHEET_NAME || "Alerts";
 
 // ------------------------------------
-// STRATEGY TUNING (RELAXED BUT SAFE)
+// PARAMETERS (REALISTIC)
 // ------------------------------------
-const ADX_THRESHOLD = 15;
-const VOLUME_MULTIPLIER = 1.1;
+const ADX_MIN = 18;
+const VOLUME_MULTIPLIER = 0.9;
 
 // ------------------------------------
 // TELEGRAM
@@ -46,7 +46,11 @@ function sendTelegram(msg) {
   fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text: msg, parse_mode: "HTML" })
+    body: JSON.stringify({
+      chat_id: TELEGRAM_CHAT_ID,
+      text: msg,
+      parse_mode: "HTML"
+    })
   });
 }
 
@@ -69,64 +73,50 @@ async function appendSheetRow(row) {
       requestBody: { values: [row] }
     });
   } catch (e) {
-    console.log("Sheet error", e.message);
+    console.log("Sheet error:", e.message);
   }
 }
 
 // ------------------------------------
-// ORB (FIRST 30 MINUTES)
+// SIGNAL LOGIC (ALIGNED WITH TV)
 // ------------------------------------
-function getORB(candles15) {
-  const firstTwo = candles15.slice(0, 2);
-  return {
-    high: Math.max(...firstTwo.map(c => c.high)),
-    low: Math.min(...firstTwo.map(c => c.low))
-  };
-}
+function checkSignal(symbol, candles) {
+  if (candles.length < 60) return null;
 
-// ------------------------------------
-// SIGNAL LOGIC (BREAKOUT + PULLBACK)
-// ------------------------------------
-function checkSignal(symbol, orb, candles5) {
-  if (candles5.length < 50) return null;
-
-  const closes = candles5.map(c => c.close);
-  const highs = candles5.map(c => c.high);
-  const lows = candles5.map(c => c.low);
-  const volumes = candles5.map(c => c.volume);
+  const closes = candles.map(c => c.close);
+  const highs = candles.map(c => c.high);
+  const lows = candles.map(c => c.low);
+  const volumes = candles.map(c => c.volume);
 
   const ema20 = technicalIndicators.EMA.calculate({ period: 20, values: closes });
   const ema50 = technicalIndicators.EMA.calculate({ period: 50, values: closes });
-  const adx = technicalIndicators.ADX.calculate({ high: highs, low: lows, close: closes, period: 14 });
+  const adxArr = technicalIndicators.ADX.calculate({
+    high: highs,
+    low: lows,
+    close: closes,
+    period: 14
+  });
   const avgVol20 = technicalIndicators.SMA.calculate({ period: 20, values: volumes });
 
-  const last = candles5[candles5.length - 1];
+  const last = candles.at(-1);
+  const adxNow = adxArr.at(-1)?.adx;
+  const adxPrev = adxArr.at(-2)?.adx;
+
+  if (!adxNow || !adxPrev) return null;
 
   const trendUp = ema20.at(-1) > ema50.at(-1);
   const trendDown = ema20.at(-1) < ema50.at(-1);
-  const strongADX = adx.at(-1)?.adx > ADX_THRESHOLD;
-  const volumeSpike = last.volume > avgVol20.at(-1) * VOLUME_MULTIPLIER;
+  const adxRising = adxNow > ADX_MIN && adxNow > adxPrev;
+  const volumeOk = last.volume > avgVol20.at(-1) * VOLUME_MULTIPLIER;
 
-  // BUY
-  if (
-    last.close > orb.high &&
-    trendUp &&
-    strongADX &&
-    volumeSpike &&
-    last.close > ema20.at(-1)
-  ) {
-    return { type: "BUY", reason: "ORB Breakout + Trend + Volume" };
+  // LONG
+  if (trendUp && adxRising && volumeOk && last.close > ema20.at(-1)) {
+    return { type: "BUY", reason: "EMA Trend + ADX Rising" };
   }
 
-  // SELL
-  if (
-    last.close < orb.low &&
-    trendDown &&
-    strongADX &&
-    volumeSpike &&
-    last.close < ema20.at(-1)
-  ) {
-    return { type: "SELL", reason: "ORB Breakdown + Trend + Volume" };
+  // SHORT
+  if (trendDown && adxRising && volumeOk && last.close < ema20.at(-1)) {
+    return { type: "SELL", reason: "EMA Trend + ADX Rising" };
   }
 
   return null;
@@ -137,9 +127,11 @@ function checkSignal(symbol, orb, candles5) {
 // ------------------------------------
 async function fetchData(symbol) {
   try {
-    const c5 = await yahooFinance.chart(symbol, { interval: "5m", range: "2d" });
-    const c15 = await yahooFinance.chart(symbol, { interval: "15m", range: "1d" });
-    return { candles5: c5.quotes, candles15: c15.quotes };
+    const data = await yahooFinance.chart(symbol, {
+      interval: "5m",
+      range: "2d"
+    });
+    return data.quotes;
   } catch {
     return null;
   }
@@ -153,20 +145,26 @@ async function runScanner() {
   const h = now.getHours();
   const m = now.getMinutes();
 
-  if (h < 9 || (h === 9 && m < 20) || h > 15 || (h === 15 && m > 10)) return;
+  // NSE market timing
+  if (h < 9 || (h === 9 && m < 20) || h > 15 || (h === 15 && m > 10)) {
+    console.log("Market closed");
+    return;
+  }
 
   for (const symbol of SYMBOLS) {
-    const data = await fetchData(symbol);
-    if (!data) continue;
+    const candles = await fetchData(symbol);
+    if (!candles) continue;
 
-    const orb = getORB(data.candles15);
-    const signal = checkSignal(symbol, orb, data.candles5);
+    const signal = checkSignal(symbol, candles);
+    if (!signal) continue;
 
-    if (signal) {
-      const msg = `<b>${signal.type} ALERT</b>\nSymbol: <b>${symbol}</b>\nLogic: ${signal.reason}\nTime: ${now.toLocaleTimeString()}`;
-      sendTelegram(msg);
-      appendSheetRow([now.toLocaleString(), symbol, signal.type, signal.reason]);
-    }
+    const msg = `<b>${signal.type} ALERT</b>
+Symbol: <b>${symbol}</b>
+Logic: ${signal.reason}
+Time: ${now.toLocaleTimeString()}`;
+
+    sendTelegram(msg);
+    appendSheetRow([now.toLocaleString(), symbol, signal.type, signal.reason]);
   }
 }
 
