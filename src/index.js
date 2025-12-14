@@ -4,7 +4,7 @@ import fetch from "node-fetch";
 import { google } from "googleapis";
 
 // ------------------------------------
-// 100 NSE STOCKS (HARDCODED LIST)
+// NSE STOCKS
 // ------------------------------------
 const SYMBOLS = [
   "RELIANCE.NS","TCS.NS","HDFCBANK.NS","INFY.NS","HDFC.NS","ICICIBANK.NS","KOTAKBANK.NS","LT.NS",
@@ -31,66 +31,65 @@ const GOOGLE_SERVICE_ACCOUNT_JSON = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 const SHEET_NAME = process.env.SHEET_NAME || "Alerts";
 
-const ADX_THRESHOLD = 20;
-const VOLUME_MULTIPLIER = 1.3;
+// ------------------------------------
+// STRATEGY TUNING (RELAXED BUT SAFE)
+// ------------------------------------
+const ADX_THRESHOLD = 15;
+const VOLUME_MULTIPLIER = 1.1;
 
 // ------------------------------------
-// UTILITIES
+// TELEGRAM
 // ------------------------------------
 function sendTelegram(msg) {
   if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return;
 
-  const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
-
-  fetch(url, {
+  fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      chat_id: TELEGRAM_CHAT_ID,
-      text: msg,
-      parse_mode: "HTML"
-    })
+    body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text: msg, parse_mode: "HTML" })
   });
 }
 
-// Google Sheets
-async function getSheetsClient() {
-  const creds = JSON.parse(GOOGLE_SERVICE_ACCOUNT_JSON);
-
-  const auth = new google.auth.GoogleAuth({
-    credentials: creds,
-    scopes: ["https://www.googleapis.com/auth/spreadsheets"]
-  });
-
-  return google.sheets({ version: "v4", auth: await auth.getClient() });
-}
-
+// ------------------------------------
+// GOOGLE SHEETS
+// ------------------------------------
 async function appendSheetRow(row) {
   try {
-    const sheets = await getSheetsClient();
+    const creds = JSON.parse(GOOGLE_SERVICE_ACCOUNT_JSON);
+    const auth = new google.auth.GoogleAuth({
+      credentials: creds,
+      scopes: ["https://www.googleapis.com/auth/spreadsheets"]
+    });
+    const sheets = google.sheets({ version: "v4", auth: await auth.getClient() });
+
     await sheets.spreadsheets.values.append({
       spreadsheetId: SPREADSHEET_ID,
       range: `${SHEET_NAME}!A1`,
       valueInputOption: "USER_ENTERED",
       requestBody: { values: [row] }
     });
-  } catch (err) {
-    console.log("Sheet error:", err);
+  } catch (e) {
+    console.log("Sheet error", e.message);
   }
 }
 
 // ------------------------------------
-// ORB LOGIC
+// ORB (FIRST 30 MINUTES)
 // ------------------------------------
 function getORB(candles15) {
-  const c = candles15[0];
-  return { high: c.high, low: c.low };
+  const firstTwo = candles15.slice(0, 2);
+  return {
+    high: Math.max(...firstTwo.map(c => c.high)),
+    low: Math.min(...firstTwo.map(c => c.low))
+  };
 }
 
 // ------------------------------------
-// SIGNAL LOGIC
+// SIGNAL LOGIC (BREAKOUT + PULLBACK)
 // ------------------------------------
 function checkSignal(symbol, orb, candles5) {
+  if (candles5.length < 50) return null;
+
   const closes = candles5.map(c => c.close);
   const highs = candles5.map(c => c.high);
   const lows = candles5.map(c => c.low);
@@ -98,24 +97,37 @@ function checkSignal(symbol, orb, candles5) {
 
   const ema20 = technicalIndicators.EMA.calculate({ period: 20, values: closes });
   const ema50 = technicalIndicators.EMA.calculate({ period: 50, values: closes });
-
-  const adx = technicalIndicators.ADX.calculate({
-    high: highs, low: lows, close: closes, period: 14
-  });
-
+  const adx = technicalIndicators.ADX.calculate({ high: highs, low: lows, close: closes, period: 14 });
   const avgVol20 = technicalIndicators.SMA.calculate({ period: 20, values: volumes });
+
   const last = candles5[candles5.length - 1];
 
   const trendUp = ema20.at(-1) > ema50.at(-1);
   const trendDown = ema20.at(-1) < ema50.at(-1);
-  const strongADX = adx.at(-1).adx > ADX_THRESHOLD;
+  const strongADX = adx.at(-1)?.adx > ADX_THRESHOLD;
   const volumeSpike = last.volume > avgVol20.at(-1) * VOLUME_MULTIPLIER;
 
-  if (last.close > orb.high && trendUp && strongADX && volumeSpike)
-    return { type: "BUY", reason: "ORB Breakout + Trend + ADX + Volume" };
+  // BUY
+  if (
+    last.close > orb.high &&
+    trendUp &&
+    strongADX &&
+    volumeSpike &&
+    last.close > ema20.at(-1)
+  ) {
+    return { type: "BUY", reason: "ORB Breakout + Trend + Volume" };
+  }
 
-  if (last.close < orb.low && trendDown && strongADX && volumeSpike)
-    return { type: "SELL", reason: "ORB Breakdown + Trend + ADX + Volume" };
+  // SELL
+  if (
+    last.close < orb.low &&
+    trendDown &&
+    strongADX &&
+    volumeSpike &&
+    last.close < ema20.at(-1)
+  ) {
+    return { type: "SELL", reason: "ORB Breakdown + Trend + Volume" };
+  }
 
   return null;
 }
@@ -127,7 +139,6 @@ async function fetchData(symbol) {
   try {
     const c5 = await yahooFinance.chart(symbol, { interval: "5m", range: "2d" });
     const c15 = await yahooFinance.chart(symbol, { interval: "15m", range: "1d" });
-
     return { candles5: c5.quotes, candles15: c15.quotes };
   } catch {
     return null;
@@ -135,41 +146,32 @@ async function fetchData(symbol) {
 }
 
 // ------------------------------------
-// MAIN LOGIC
+// MAIN SCANNER
 // ------------------------------------
 async function runScanner() {
   const now = new Date();
-  const hour = now.getHours();
-  const minute = now.getMinutes();
+  const h = now.getHours();
+  const m = now.getMinutes();
 
-  // Market hours = 9:15 to 3:30
-  if (hour < 9 || (hour === 9 && minute < 16) || hour > 15) {
-    console.log("Market closed.");
-    return;
-  }
+  if (h < 9 || (h === 9 && m < 20) || h > 15 || (h === 15 && m > 10)) return;
 
   for (const symbol of SYMBOLS) {
     const data = await fetchData(symbol);
     if (!data) continue;
 
-    const { candles5, candles15 } = data;
-    const orb = getORB(candles15);
-    const sig = checkSignal(symbol, orb, candles5);
+    const orb = getORB(data.candles15);
+    const signal = checkSignal(symbol, orb, data.candles5);
 
-    if (sig) {
-      const msg = `
-<b>${sig.type} SIGNAL</b>
-Symbol: <b>${symbol}</b>
-Reason: ${sig.reason}
-Time: ${now.toLocaleTimeString()}
-      `;
+    if (signal) {
+      const msg = `<b>${signal.type} ALERT</b>\nSymbol: <b>${symbol}</b>\nLogic: ${signal.reason}\nTime: ${now.toLocaleTimeString()}`;
       sendTelegram(msg);
-
-      appendSheetRow([
-        new Date().toLocaleString(), symbol, sig.type, sig.reason
-      ]);
+      appendSheetRow([now.toLocaleString(), symbol, signal.type, signal.reason]);
     }
   }
 }
 
+// ------------------------------------
+// RUN EVERY 5 MINUTES
+// ------------------------------------
 runScanner();
+setInterval(runScanner, 5 * 60 * 1000);
