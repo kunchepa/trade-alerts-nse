@@ -2,10 +2,14 @@ name: Trade Alerts Scheduler
 
 on:
   schedule:
-    - cron: "*/5 3-11 * * *"
+    # NSE market: 9:20 AM – 3:10 PM IST
+    # UTC: 3:50 – 9:40
+    - cron: "*/5 4-10 * * 1-5"
   workflow_dispatch:
-  repository_dispatch:
-    types: [external_trigger]
+
+concurrency:
+  group: trade-alerts
+  cancel-in-progress: true
 
 jobs:
   run-scanner:
