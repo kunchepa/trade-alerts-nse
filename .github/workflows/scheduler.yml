@@ -2,11 +2,13 @@ name: Trade Alerts Scheduler
 
 on:
   schedule:
-    - cron: "*/5 3-11 * * 1-5"   # NSE hours only (Mon–Fri)
+    # NSE market hours (09:15–15:30 IST)
+    - cron: "*/5 3-11 * * 1-5"
   workflow_dispatch:
   repository_dispatch:
     types: [external_trigger]
 
+# 🚨 VERY IMPORTANT – prevents queued/cancelled storms
 concurrency:
   group: trade-alerts-nse
   cancel-in-progress: true
