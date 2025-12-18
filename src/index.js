@@ -2,6 +2,16 @@ import yahooFinance from "yahoo-finance2";
 import technicalIndicators from "technicalindicators";
 import fetch from "node-fetch";
 import { google } from "googleapis";
+import fs from "fs";
+
+// ---------------- LOCK (VERY IMPORTANT) ----------------
+const LOCK_FILE = "/tmp/trade-alert.lock";
+
+if (fs.existsSync(LOCK_FILE)) {
+  console.log("Another run already active. Exiting.");
+  process.exit(0);
+}
+fs.writeFileSync(LOCK_FILE, "locked");
 
 // ---------------- CONFIG ----------------
 const SYMBOLS = [
@@ -49,6 +59,7 @@ async function appendSheetRow(row) {
       credentials: creds,
       scopes: ["https://www.googleapis.com/auth/spreadsheets"]
     });
+
     const sheets = google.sheets({ version: "v4", auth: await auth.getClient() });
 
     await sheets.spreadsheets.values.append({
@@ -90,11 +101,23 @@ function checkSignal(candles) {
   const adxRising = adxNow > ADX_MIN && adxNow > adxPrev;
   const volumeOk = last.volume > volAvg.at(-1) * VOLUME_MULTIPLIER;
 
-  if (ema20.at(-1) > ema50.at(-1) && adxRising && volumeOk && last.close > ema20.at(-1)) {
+  // LONG
+  if (
+    ema20.at(-1) > ema50.at(-1) &&
+    adxRising &&
+    volumeOk &&
+    last.close > ema20.at(-1)
+  ) {
     return { type: "BUY", reason: "EMA20>EMA50 + ADX rising" };
   }
 
-  if (ema20.at(-1) < ema50.at(-1) && adxRising && volumeOk && last.close < ema20.at(-1)) {
+  // SHORT
+  if (
+    ema20.at(-1) < ema50.at(-1) &&
+    adxRising &&
+    volumeOk &&
+    last.close < ema20.at(-1)
+  ) {
     return { type: "SELL", reason: "EMA20<EMA50 + ADX rising" };
   }
 
@@ -131,9 +154,18 @@ Logic: ${signal.reason}
 Time: ${now.toLocaleTimeString()}`;
 
     await sendTelegram(msg);
-    await appendSheetRow([now.toLocaleString(), symbol, signal.type, signal.reason]);
+    await appendSheetRow([
+      now.toLocaleString(),
+      symbol,
+      signal.type,
+      signal.reason
+    ]);
   }
 }
 
-await runScanner();
-process.exit(0);
+try {
+  await runScanner();
+} finally {
+  fs.unlinkSync(LOCK_FILE);
+  process.exit(0);
+}
