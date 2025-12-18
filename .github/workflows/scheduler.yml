@@ -6,11 +6,12 @@ on:
 
 concurrency:
   group: trade-alerts-external
-  cancel-in-progress: false   # IMPORTANT
+  cancel-in-progress: false   # do NOT cancel running jobs
 
 jobs:
   run-scanner:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Checkout repository
@@ -20,9 +21,10 @@ jobs:
         uses: actions/setup-node@v3
         with:
           node-version: 18
+          cache: "npm"   # 🔥 IMPORTANT: speeds up runs
 
       - name: Install dependencies
-        run: npm install
+        run: npm install --prefer-offline --no-audit --progress=false
 
       - name: Run Scanner
         env:
