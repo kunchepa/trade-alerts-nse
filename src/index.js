@@ -32,7 +32,7 @@ const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 const SHEET_NAME = process.env.SHEET_NAME || "Alerts";
 
 // ------------------------------------
-// PARAMETERS (REALISTIC)
+// PARAMETERS
 // ------------------------------------
 const ADX_MIN = 18;
 const VOLUME_MULTIPLIER = 0.9;
@@ -78,9 +78,9 @@ async function appendSheetRow(row) {
 }
 
 // ------------------------------------
-// SIGNAL LOGIC (ALIGNED WITH TV)
+// SIGNAL LOGIC
 // ------------------------------------
-function checkSignal(symbol, candles) {
+function checkSignal(candles) {
   if (candles.length < 60) return null;
 
   const closes = candles.map(c => c.close);
@@ -109,12 +109,10 @@ function checkSignal(symbol, candles) {
   const adxRising = adxNow > ADX_MIN && adxNow > adxPrev;
   const volumeOk = last.volume > avgVol20.at(-1) * VOLUME_MULTIPLIER;
 
-  // LONG
   if (trendUp && adxRising && volumeOk && last.close > ema20.at(-1)) {
     return { type: "BUY", reason: "EMA Trend + ADX Rising" };
   }
 
-  // SHORT
   if (trendDown && adxRising && volumeOk && last.close < ema20.at(-1)) {
     return { type: "SELL", reason: "EMA Trend + ADX Rising" };
   }
@@ -138,14 +136,13 @@ async function fetchData(symbol) {
 }
 
 // ------------------------------------
-// MAIN SCANNER
+// MAIN
 // ------------------------------------
 async function runScanner() {
   const now = new Date();
   const h = now.getHours();
   const m = now.getMinutes();
 
-  // NSE market timing
   if (h < 9 || (h === 9 && m < 20) || h > 15 || (h === 15 && m > 10)) {
     console.log("Market closed");
     return;
@@ -155,7 +152,7 @@ async function runScanner() {
     const candles = await fetchData(symbol);
     if (!candles) continue;
 
-    const signal = checkSignal(symbol, candles);
+    const signal = checkSignal(candles);
     if (!signal) continue;
 
     const msg = `<b>${signal.type} ALERT</b>
@@ -164,12 +161,9 @@ Logic: ${signal.reason}
 Time: ${now.toLocaleTimeString()}`;
 
     sendTelegram(msg);
-    appendSheetRow([now.toLocaleString(), symbol, signal.type, signal.reason]);
+    await appendSheetRow([now.toLocaleString(), symbol, signal.type, signal.reason]);
   }
 }
 
-// ------------------------------------
-// RUN EVERY 5 MINUTES
-// ------------------------------------
-runScanner();
-setInterval(runScanner, 5 * 60 * 1000);
+await runScanner();
+process.exit(0);
