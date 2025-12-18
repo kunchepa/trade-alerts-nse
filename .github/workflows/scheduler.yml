@@ -6,7 +6,7 @@ on:
 
 concurrency:
   group: trade-alerts-external
-  cancel-in-progress: false   # do NOT cancel running jobs
+  cancel-in-progress: false   # NEVER cancel running jobs
 
 jobs:
   run-scanner:
@@ -21,7 +21,7 @@ jobs:
         uses: actions/setup-node@v3
         with:
           node-version: 18
-          cache: "npm"   # 🔥 IMPORTANT: speeds up runs
+          cache: npm
 
       - name: Install dependencies
         run: npm install --prefer-offline --no-audit --progress=false
