@@ -4,15 +4,15 @@ import fetch from "node-fetch";
 import { google } from "googleapis";
 
 /* =====================================================
-   CONFIG
+   CONFIG – AGGRESSIVE MOMENTUM MODE
 ===================================================== */
 
-const ADX_THRESHOLD = 12;          // Aggressive
+const ADX_THRESHOLD = 12;
 const MOMENTUM_ADX = 18;
 const VOLUME_MULTIPLIER = 1.1;
 const MOMENTUM_VOLUME = 1.5;
-const ORB_BUFFER = 0.001;
-const ATR_PCT_THRESHOLD = 0.009;
+const ORB_BUFFER = 0.001;          // 0.10%
+const ATR_PCT_THRESHOLD = 0.009;   // 0.9%
 
 /* =====================================================
    ENV
@@ -34,15 +34,18 @@ async function sendTelegram(msg) {
   if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return;
 
   try {
-    await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: TELEGRAM_CHAT_ID,
-        text: msg,
-        parse_mode: "HTML"
-      })
-    });
+    await fetch(
+      `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: TELEGRAM_CHAT_ID,
+          text: msg,
+          parse_mode: "HTML"
+        })
+      }
+    );
   } catch {}
 }
 
@@ -55,6 +58,7 @@ async function appendSheetRow(row) {
 
   try {
     const creds = JSON.parse(GOOGLE_SERVICE_ACCOUNT_JSON);
+
     const auth = new google.auth.GoogleAuth({
       credentials: creds,
       scopes: ["https://www.googleapis.com/auth/spreadsheets"]
@@ -75,7 +79,7 @@ async function appendSheetRow(row) {
 }
 
 /* =====================================================
-   DATA
+   DATA FETCH
 ===================================================== */
 
 async function fetchData(symbol) {
@@ -90,7 +94,7 @@ async function fetchData(symbol) {
 }
 
 /* =====================================================
-   MOMENTUM DETECTOR
+   MOMENTUM STOCK DETECTOR
 ===================================================== */
 
 function isMomentumStock(candles) {
@@ -100,22 +104,13 @@ function isMomentumStock(candles) {
   const volumes = candles.map(c => c.volume);
 
   const adxArr = technicalIndicators.ADX.calculate({
-    high: highs,
-    low: lows,
-    close: closes,
-    period: 14
+    high: highs, low: lows, close: closes, period: 14
   });
-
   const atrArr = technicalIndicators.ATR.calculate({
-    high: highs,
-    low: lows,
-    close: closes,
-    period: 14
+    high: highs, low: lows, close: closes, period: 14
   });
-
   const avgVol = technicalIndicators.SMA.calculate({
-    period: 20,
-    values: volumes
+    period: 20, values: volumes
   });
 
   if (!adxArr.length || !atrArr.length || !avgVol.length) return false;
@@ -134,10 +129,10 @@ function isMomentumStock(candles) {
 }
 
 /* =====================================================
-   SIGNAL LOGIC (AGGRESSIVE)
+   SIGNAL LOGIC + TRADE LEVELS
 ===================================================== */
 
-function checkSignal(orb, candles) {
+function checkSignal(symbol, orb, candles) {
   const closes = candles.map(c => c.close);
   const highs = candles.map(c => c.high);
   const lows = candles.map(c => c.low);
@@ -148,7 +143,9 @@ function checkSignal(orb, candles) {
   const adxArr = technicalIndicators.ADX.calculate({
     high: highs, low: lows, close: closes, period: 14
   });
-  const avgVol = technicalIndicators.SMA.calculate({ period: 20, values: volumes });
+  const avgVol = technicalIndicators.SMA.calculate({
+    period: 20, values: volumes
+  });
 
   if (!ema20.length || !ema50.length || !adxArr.length || !avgVol.length) return null;
 
@@ -160,25 +157,52 @@ function checkSignal(orb, candles) {
   const strongADX = adxArr.at(-1).adx >= ADX_THRESHOLD;
   const volumeSpike = last.volume >= avgVol.at(-1) * VOLUME_MULTIPLIER;
 
-  const buyBreak =
+  const buyStrength =
     last.close > orb.high * (1 + ORB_BUFFER) ||
     (last.close > ema20.at(-1) && last.close > ema50.at(-1));
 
-  const sellBreak =
+  const sellStrength =
     last.close < orb.low * (1 - ORB_BUFFER) ||
     (last.close < ema20.at(-1) && last.close < ema50.at(-1));
 
-  if (buyBreak && trendUp && (strongADX || volumeSpike))
-    return "BUY";
+  let signal = null;
 
-  if (sellBreak && trendDown && (strongADX || volumeSpike))
-    return "SELL";
+  if (buyStrength && trendUp && (strongADX || volumeSpike)) signal = "BUY";
+  if (sellStrength && trendDown && (strongADX || volumeSpike)) signal = "SELL";
 
-  return null;
+  if (!signal) return null;
+
+  // ---- Trade Levels ----
+  const entry = last.close;
+  const sl = signal === "BUY"
+    ? Math.min(orb.low, ema20.at(-1))
+    : Math.max(orb.high, ema20.at(-1));
+
+  const risk = Math.abs(entry - sl);
+
+  const target1 = signal === "BUY"
+    ? entry + risk
+    : entry - risk;
+
+  const target2 = signal === "BUY"
+    ? entry + risk * 2
+    : entry - risk * 2;
+
+  return {
+    signal,
+    entry,
+    sl,
+    target1,
+    target2,
+    time: new Date(last.date).toLocaleTimeString(),
+    reason: signal === "BUY"
+      ? "Momentum breakout + EMA trend"
+      : "Momentum breakdown + EMA trend"
+  };
 }
 
 /* =====================================================
-   MAIN
+   MAIN SCANNER
 ===================================================== */
 
 async function runScanner() {
@@ -186,9 +210,11 @@ async function runScanner() {
   const h = now.getHours();
   const m = now.getMinutes();
 
+  // NSE market hours
   if (h < 9 || (h === 9 && m < 16) || h > 15) return;
 
   const universe = await yahooFinance.trendingSymbols("IN");
+
   const symbols = universe.quotes
     .filter(s => s.symbol.endsWith(".NS"))
     .slice(0, 40)
@@ -200,21 +226,41 @@ async function runScanner() {
 
     if (!isMomentumStock(data.c5)) continue;
 
-    const orb = { high: data.c15[0].high, low: data.c15[0].low };
-    const signal = checkSignal(orb, data.c5);
+    const orb = {
+      high: data.c15[0].high,
+      low: data.c15[0].low
+    };
 
-    if (signal) {
-      const msg = `
-<b>${signal} SIGNAL</b>
+    const trade = checkSignal(symbol, orb, data.c5);
+    if (!trade) continue;
+
+    const msg = `
+${trade.signal === "BUY" ? "📈 BUY" : "📉 SELL"} – MOMENTUM TRADE
+
 <b>Stock:</b> ${symbol}
-<b>Mode:</b> AGGRESSIVE
-<b>Time:</b> ${now.toLocaleTimeString()}
-      `;
-      await sendTelegram(msg);
-      await appendSheetRow([
-        now.toLocaleString(), symbol, signal, "Aggressive Momentum"
-      ]);
-    }
+<b>Time:</b> ${trade.time}
+
+<b>Entry (CMP):</b> ${trade.entry.toFixed(2)}
+<b>Stop Loss:</b> ${trade.sl.toFixed(2)}
+
+<b>Target 1:</b> ${trade.target1.toFixed(2)}
+<b>Target 2:</b> ${trade.target2.toFixed(2)}
+
+<b>Reason:</b> ${trade.reason}
+    `;
+
+    await sendTelegram(msg);
+
+    await appendSheetRow([
+      now.toLocaleString(),
+      symbol,
+      trade.signal,
+      trade.entry,
+      trade.sl,
+      trade.target1,
+      trade.target2,
+      trade.reason
+    ]);
   }
 }
 
