@@ -46,7 +46,9 @@ async function sendTelegram(msg) {
         })
       }
     );
-  } catch {}
+  } catch (err) {
+    console.log("Telegram error:", err.message);
+  }
 }
 
 /* =====================================================
@@ -58,7 +60,6 @@ async function appendSheetRow(row) {
 
   try {
     const creds = JSON.parse(GOOGLE_SERVICE_ACCOUNT_JSON);
-
     const auth = new google.auth.GoogleAuth({
       credentials: creds,
       scopes: ["https://www.googleapis.com/auth/spreadsheets"]
@@ -75,7 +76,39 @@ async function appendSheetRow(row) {
       valueInputOption: "USER_ENTERED",
       requestBody: { values: [row] }
     });
-  } catch {}
+  } catch (err) {
+    console.log("Sheet error:", err.message);
+  }
+}
+
+/* =====================================================
+   SAFE DYNAMIC UNIVERSE (CRITICAL FIX)
+===================================================== */
+
+async function getDynamicUniverse() {
+  try {
+    const res = await yahooFinance.trendingSymbols("IN");
+
+    if (!res || !Array.isArray(res.quotes)) {
+      throw new Error("Invalid trendingSymbols response");
+    }
+
+    return res.quotes
+      .filter(q => typeof q.symbol === "string" && q.symbol.endsWith(".NS"))
+      .slice(0, 40)
+      .map(q => q.symbol);
+
+  } catch (err) {
+    console.log("⚠️ trendingSymbols failed – using fallback universe");
+
+    return [
+      "RELIANCE.NS","ICICIBANK.NS","HDFCBANK.NS","SBIN.NS","AXISBANK.NS",
+      "INFY.NS","TCS.NS","LT.NS","ITC.NS","BAJFINANCE.NS",
+      "HINDALCO.NS","TATASTEEL.NS","ONGC.NS","POWERGRID.NS",
+      "ADANIENT.NS","ADANIPORTS.NS","JSWSTEEL.NS","COALINDIA.NS",
+      "NTPC.NS","MARUTI.NS"
+    ];
+  }
 }
 
 /* =====================================================
@@ -94,7 +127,7 @@ async function fetchData(symbol) {
 }
 
 /* =====================================================
-   MOMENTUM STOCK DETECTOR
+   MOMENTUM DETECTOR
 ===================================================== */
 
 function isMomentumStock(candles) {
@@ -106,9 +139,11 @@ function isMomentumStock(candles) {
   const adxArr = technicalIndicators.ADX.calculate({
     high: highs, low: lows, close: closes, period: 14
   });
+
   const atrArr = technicalIndicators.ATR.calculate({
     high: highs, low: lows, close: closes, period: 14
   });
+
   const avgVol = technicalIndicators.SMA.calculate({
     period: 20, values: volumes
   });
@@ -129,7 +164,7 @@ function isMomentumStock(candles) {
 }
 
 /* =====================================================
-   SIGNAL LOGIC + TRADE LEVELS
+   SIGNAL + TRADE LEVELS
 ===================================================== */
 
 function checkSignal(symbol, orb, candles) {
@@ -166,13 +201,10 @@ function checkSignal(symbol, orb, candles) {
     (last.close < ema20.at(-1) && last.close < ema50.at(-1));
 
   let signal = null;
-
   if (buyStrength && trendUp && (strongADX || volumeSpike)) signal = "BUY";
   if (sellStrength && trendDown && (strongADX || volumeSpike)) signal = "SELL";
-
   if (!signal) return null;
 
-  // ---- Trade Levels ----
   const entry = last.close;
   const sl = signal === "BUY"
     ? Math.min(orb.low, ema20.at(-1))
@@ -180,20 +212,12 @@ function checkSignal(symbol, orb, candles) {
 
   const risk = Math.abs(entry - sl);
 
-  const target1 = signal === "BUY"
-    ? entry + risk
-    : entry - risk;
-
-  const target2 = signal === "BUY"
-    ? entry + risk * 2
-    : entry - risk * 2;
-
   return {
     signal,
     entry,
     sl,
-    target1,
-    target2,
+    target1: signal === "BUY" ? entry + risk : entry - risk,
+    target2: signal === "BUY" ? entry + risk * 2 : entry - risk * 2,
     time: new Date(last.date).toLocaleTimeString(),
     reason: signal === "BUY"
       ? "Momentum breakout + EMA trend"
@@ -202,7 +226,7 @@ function checkSignal(symbol, orb, candles) {
 }
 
 /* =====================================================
-   MAIN SCANNER
+   MAIN
 ===================================================== */
 
 async function runScanner() {
@@ -213,12 +237,7 @@ async function runScanner() {
   // NSE market hours
   if (h < 9 || (h === 9 && m < 16) || h > 15) return;
 
-  const universe = await yahooFinance.trendingSymbols("IN");
-
-  const symbols = universe.quotes
-    .filter(s => s.symbol.endsWith(".NS"))
-    .slice(0, 40)
-    .map(s => s.symbol);
+  const symbols = await getDynamicUniverse();
 
   for (const symbol of symbols) {
     const data = await fetchData(symbol);
@@ -240,7 +259,7 @@ ${trade.signal === "BUY" ? "📈 BUY" : "📉 SELL"} – MOMENTUM TRADE
 <b>Stock:</b> ${symbol}
 <b>Time:</b> ${trade.time}
 
-<b>Entry (CMP):</b> ${trade.entry.toFixed(2)}
+<b>Entry:</b> ${trade.entry.toFixed(2)}
 <b>Stop Loss:</b> ${trade.sl.toFixed(2)}
 
 <b>Target 1:</b> ${trade.target1.toFixed(2)}
@@ -250,7 +269,6 @@ ${trade.signal === "BUY" ? "📈 BUY" : "📉 SELL"} – MOMENTUM TRADE
     `;
 
     await sendTelegram(msg);
-
     await appendSheetRow([
       now.toLocaleString(),
       symbol,
