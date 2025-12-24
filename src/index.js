@@ -1,7 +1,6 @@
 import yahooFinance from "yahoo-finance2";
-import { EMA, RSI, ADX } from "technicalindicators";
+import { EMA, ADX } from "technicalindicators";
 import fetch from "node-fetch";
-import { google } from "googleapis";
 
 /* =========================
    CONFIG
@@ -9,9 +8,9 @@ import { google } from "googleapis";
 
 const INTERVAL = "5m";
 const LOOKBACK_DAYS = 10;
-const MIN_VOLUME_SPIKE = 1.2;
-const COOLDOWN_HOURS = 6;
 const MAX_SIGNALS_PER_RUN = 4;
+const MARKET_CLOSE_HOUR = 15;
+const MARKET_CLOSE_MIN = 20;
 
 const FALLBACK_SYMBOLS = [
   "RELIANCE.NS","TCS.NS","HDFCBANK.NS","INFY.NS","HDFC.NS","ICICIBANK.NS","KOTAKBANK.NS","LT.NS",
@@ -30,6 +29,12 @@ const FALLBACK_SYMBOLS = [
 ];
 
 /* =========================
+   STATE (IN-MEMORY)
+========================= */
+
+let allCalls = [];   // {symbol, side, confidence}
+
+/* =========================
    TELEGRAM
 ========================= */
 
@@ -46,83 +51,70 @@ async function sendTelegram(message) {
 }
 
 /* =========================
-   GOOGLE SHEETS
+   MARKET TREND (NIFTY)
 ========================= */
 
-async function appendSheet(row) {
-  const auth = new google.auth.GoogleAuth({
-    credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON),
-    scopes: ["https://www.googleapis.com/auth/spreadsheets"]
-  });
+async function getMarketTrend() {
+  try {
+    const data = await yahooFinance.historical("^NSEI", {
+      period1: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000),
+      period2: new Date(),
+      interval: "15m"
+    });
 
-  const sheets = google.sheets({ version: "v4", auth });
-  await sheets.spreadsheets.values.append({
-    spreadsheetId: process.env.SPREADSHEET_ID,
-    range: "Alerts!A1",
-    valueInputOption: "RAW",
-    requestBody: { values: [row] }
-  });
+    const closes = data.map(c => c.close);
+    const ema20 = EMA.calculate({ period: 20, values: closes });
+
+    return closes.at(-1) > ema20.at(-1)
+      ? "BULLISH"
+      : "BEARISH";
+  } catch {
+    return "SIDEWAYS";
+  }
 }
 
 /* =========================
-   DATA FETCH
+   UNIVERSE
 ========================= */
 
 async function getDynamicUniverse() {
   try {
     const res = await yahooFinance.trendingSymbols("IN");
-    const symbols = res?.quotes?.map(q => q.symbol + ".NS") || [];
-    if (symbols.length > 0) return symbols;
-  } catch (e) {
-    console.log("⚠️ trendingSymbols failed – using fallback universe");
+    return res.quotes
+      .map(q => q.symbol)
+      .filter(s => s.endsWith(".NS"))
+      .slice(0, 20);
+  } catch {
+    return FALLBACK_SYMBOLS;
   }
-  return FALLBACK_SYMBOLS;
 }
+
+/* =========================
+   DATA
+========================= */
 
 async function getHistorical(symbol) {
   try {
-    const to = new Date();
     const from = new Date();
     from.setDate(from.getDate() - LOOKBACK_DAYS);
 
     const candles = await yahooFinance.historical(symbol, {
       period1: from,
-      period2: to,
+      period2: new Date(),
       interval: INTERVAL
     });
 
-    if (!candles || candles.length < 60) return null;
-    return candles;
-  } catch (e) {
-    console.log(`❌ Historical failed for ${symbol}`);
+    return candles?.length > 50 ? candles : null;
+  } catch {
     return null;
   }
 }
 
 /* =========================
-   STRATEGY LOGIC
+   SIGNAL LOGIC
 ========================= */
 
-function isMomentum(candles) {
-  const closes = candles.map(c => c.close);
-  const volumes = candles.map(c => c.volume);
-
-  const ema9 = EMA.calculate({ period: 9, values: closes });
-  const ema21 = EMA.calculate({ period: 21, values: closes });
-  const rsi = RSI.calculate({ period: 14, values: closes });
-
-  const last = closes.length - 1;
-  const volAvg = volumes.slice(-20).reduce((a,b)=>a+b,0)/20;
-
-  let score = 0;
-  if (ema9[last-8] > ema21[last-8]) score++;
-  if (rsi[rsi.length-1] > 50) score++;
-  if (volumes[last] > volAvg * MIN_VOLUME_SPIKE) score++;
-
-  return score >= 1; // BALANCED → ACTIVE
-}
-
-function checkSignal(symbol, candles) {
+function checkSignal(symbol, candles, marketTrend) {
   const closes = candles.map(c => c.close);
   const highs = candles.map(c => c.high);
   const lows = candles.map(c => c.low);
@@ -130,55 +122,78 @@ function checkSignal(symbol, candles) {
   const ema9 = EMA.calculate({ period: 9, values: closes });
   const ema21 = EMA.calculate({ period: 21, values: closes });
   const adx = ADX.calculate({
-    high: highs,
-    low: lows,
-    close: closes,
-    period: 14
+    high: highs, low: lows, close: closes, period: 14
   });
 
   const last = closes.length - 1;
   const price = closes[last];
-  const trendUp = ema9[last-8] > ema21[last-8];
-  const strongTrend = adx[adx.length-1]?.adx > 18;
+  const trendUp = ema9.at(-1) > ema21.at(-1);
+  const strongTrend = adx.at(-1)?.adx > 20;
 
-  if (!strongTrend) return null;
+  let confidencePoints = 0;
+  if (trendUp) confidencePoints++;
+  if (strongTrend) confidencePoints++;
+  if (
+    (trendUp && marketTrend === "BULLISH") ||
+    (!trendUp && marketTrend === "BEARISH")
+  ) confidencePoints++;
 
-  if (trendUp && price > ema9[last-8]) {
-    const sl = Math.min(...lows.slice(-10));
-    return buildTrade("BUY", price, sl, symbol);
-  }
+  const confidence = confidencePoints >= 3 ? "HIGH" : "MEDIUM";
+  if (confidencePoints < 2) return null;
 
-  if (!trendUp && price < ema9[last-8]) {
-    const sl = Math.max(...highs.slice(-10));
-    return buildTrade("SELL", price, sl, symbol);
-  }
+  const side = trendUp ? "BUY" : "SELL";
+  const sl = side === "BUY"
+    ? Math.min(...lows.slice(-10))
+    : Math.max(...highs.slice(-10));
 
-  return null;
-}
-
-function buildTrade(side, price, sl, symbol) {
   const risk = Math.abs(price - sl);
+
   return {
     symbol,
     side,
-    price: price.toFixed(2),
-    sl: sl.toFixed(2),
-    t1: (side==="BUY"?price+risk:price-risk).toFixed(2),
-    t2: (side==="BUY"?price+2*risk:price-2*risk).toFixed(2),
-    reason: "EMA trend + ADX strength",
-    time: new Date().toLocaleTimeString("en-IN")
+    price,
+    sl,
+    t1: side === "BUY" ? price + risk : price - risk,
+    t2: side === "BUY" ? price + risk * 2 : price - risk * 2,
+    confidence
   };
 }
 
 /* =========================
-   MAIN SCANNER
+   END-OF-DAY SUMMARY
+========================= */
+
+async function sendEODSummary(marketTrend) {
+  if (allCalls.length === 0) return;
+
+  const passed = allCalls.filter(c => c.confidence === "HIGH");
+  const failed = allCalls.filter(c => c.confidence === "MEDIUM");
+
+  let msg = `📊 END OF DAY SUMMARY\n\n`;
+  msg += `Total Calls: ${allCalls.length}\n`;
+  msg += `✅ PASSED: ${passed.length}\n`;
+  msg += `❌ FAILED: ${failed.length}\n\n`;
+
+  msg += `🟢 PASSED CALLS:\n`;
+  passed.forEach(c => msg += `• ${c.symbol} – ${c.side}\n`);
+
+  msg += `\n🟡 FAILED CALLS:\n`;
+  failed.forEach(c => msg += `• ${c.symbol} – ${c.side}\n`);
+
+  msg += `\n📈 Market Trend: NIFTY ${marketTrend}\n`;
+  msg += `🤖 Scanner Status: STABLE`;
+
+  await sendTelegram(msg);
+}
+
+/* =========================
+   MAIN
 ========================= */
 
 async function runScanner() {
-  console.log("🚀 Scanner started");
-
+  const now = new Date();
+  const marketTrend = await getMarketTrend();
   const symbols = await getDynamicUniverse();
-  console.log(`📊 Symbols fetched: ${symbols.length}`);
 
   let signals = 0;
 
@@ -188,44 +203,36 @@ async function runScanner() {
     const candles = await getHistorical(symbol);
     if (!candles) continue;
 
-    const momentum = isMomentum(candles);
-    console.log(`🔍 ${symbol} momentum = ${momentum}`);
-    if (!momentum) continue;
-
-    const trade = checkSignal(symbol, candles);
-    console.log(`📈 ${symbol} signal = ${trade ? trade.side : "NO"}`);
-
+    const trade = checkSignal(symbol, candles, marketTrend);
     if (!trade) continue;
 
     signals++;
+    allCalls.push({ symbol: trade.symbol, side: trade.side, confidence: trade.confidence });
 
     const msg = `
 📢 ${trade.side} ${trade.symbol}
-⏰ ${trade.time}
-💰 CMP: ${trade.price}
-🎯 T1: ${trade.t1}
-🎯 T2: ${trade.t2}
-🛑 SL: ${trade.sl}
-📌 ${trade.reason}
-`;
+⏰ ${new Date().toLocaleTimeString("en-IN")}
+
+💰 Entry: ${trade.price.toFixed(2)}
+🛑 SL: ${trade.sl.toFixed(2)}
+
+🎯 T1: ${trade.t1.toFixed(2)}
+🎯 T2: ${trade.t2.toFixed(2)}
+
+📊 R:R = 1 : 2
+📈 Market: NIFTY ${marketTrend}
+${trade.confidence === "HIGH" ? "✅" : "⚠️"} Confidence: ${trade.confidence}
+    `;
 
     await sendTelegram(msg);
-    await appendSheet([
-      trade.time, trade.symbol, trade.side,
-      trade.price, trade.sl, trade.t1, trade.t2, trade.reason
-    ]);
-
-    console.log("✅ TRADE SENT:", trade.symbol);
   }
 
-  console.log(`🏁 Scanner completed | Signals: ${signals}`);
+  if (
+    now.getHours() === MARKET_CLOSE_HOUR &&
+    now.getMinutes() >= MARKET_CLOSE_MIN
+  ) {
+    await sendEODSummary(marketTrend);
+  }
 }
 
-/* =========================
-   START
-========================= */
-
-runScanner().catch(err => {
-  console.error("🔥 Scanner crashed", err);
-  process.exit(1);
-});
+runScanner();
