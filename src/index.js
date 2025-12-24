@@ -1,285 +1,231 @@
 import yahooFinance from "yahoo-finance2";
-import technicalIndicators from "technicalindicators";
+import { EMA, RSI, ADX } from "technicalindicators";
 import fetch from "node-fetch";
 import { google } from "googleapis";
 
-/* =====================================================
-   CONFIG – AGGRESSIVE MOMENTUM MODE
-===================================================== */
+/* =========================
+   CONFIG
+========================= */
 
-const ADX_THRESHOLD = 12;
-const MOMENTUM_ADX = 18;
-const VOLUME_MULTIPLIER = 1.1;
-const MOMENTUM_VOLUME = 1.5;
-const ORB_BUFFER = 0.001;          // 0.10%
-const ATR_PCT_THRESHOLD = 0.009;   // 0.9%
+const INTERVAL = "5m";
+const LOOKBACK_DAYS = 10;
+const MIN_VOLUME_SPIKE = 1.2;
+const COOLDOWN_HOURS = 6;
+const MAX_SIGNALS_PER_RUN = 4;
 
-/* =====================================================
-   ENV
-===================================================== */
+const FALLBACK_SYMBOLS = [
+  "RELIANCE.NS","TCS.NS","HDFCBANK.NS","INFY.NS","HDFC.NS","ICICIBANK.NS","KOTAKBANK.NS","LT.NS",
+  "SBIN.NS","AXISBANK.NS","BAJFINANCE.NS","BHARTIARTL.NS","ITC.NS","HINDUNILVR.NS","MARUTI.NS",
+  "SUNPHARMA.NS","BAJAJFINSV.NS","ASIANPAINT.NS","NESTLEIND.NS","TITAN.NS","ONGC.NS","POWERGRID.NS",
+  "ULTRACEMCO.NS","NTPC.NS","DRREDDY.NS","HCLTECH.NS","INDUSINDBK.NS","DIVISLAB.NS","ADANIPORTS.NS",
+  "JSWSTEEL.NS","COALINDIA.NS","ADANIENT.NS","M&M.NS","TATASTEEL.NS","GRASIM.NS","WIPRO.NS",
+  "HDFCLIFE.NS","TECHM.NS","SBILIFE.NS","BRITANNIA.NS","CIPLA.NS","EICHERMOT.NS","HINDALCO.NS",
+  "HEROMOTOCO.NS","BPCL.NS","SHREECEM.NS","IOC.NS","TATACONSUM.NS","UPL.NS","ADANIGREEN.NS",
+  "VEDL.NS","DLF.NS","PIDILITIND.NS","ICICIPRULI.NS","JSWENERGY.NS","BANKBARODA.NS","CANBK.NS",
+  "PNB.NS","UNIONBANK.NS","BANDHANBNK.NS","IDFCFIRSTB.NS","GAIL.NS","TATAPOWER.NS","TORNTPHARM.NS",
+  "ABB.NS","SIEMENS.NS","MUTHOOTFIN.NS","BAJAJ-AUTO.NS","PEL.NS","AMBUJACEM.NS","ACC.NS","BEL.NS",
+  "HAL.NS","IRCTC.NS","PAYTM.NS","POLYCAB.NS","ZOMATO.NS","NAUKRI.NS","BOSCHLTD.NS","ASHOKLEY.NS",
+  "TVSMOTOR.NS","MFSL.NS","CHOLAFIN.NS","INDIGO.NS","DABUR.NS","EMAMILTD.NS","MGL.NS","IGL.NS",
+  "LUPIN.NS","BIOCON.NS","APOLLOHOSP.NS","MAXHEALTH.NS","FORTIS.NS"
+];
 
-const {
-  TELEGRAM_BOT_TOKEN,
-  TELEGRAM_CHAT_ID,
-  GOOGLE_SERVICE_ACCOUNT_JSON,
-  SPREADSHEET_ID,
-  SHEET_NAME = "Alerts"
-} = process.env;
-
-/* =====================================================
+/* =========================
    TELEGRAM
-===================================================== */
+========================= */
 
-async function sendTelegram(msg) {
-  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return;
+async function sendTelegram(message) {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const chatId = process.env.TELEGRAM_CHAT_ID;
+  if (!token || !chatId) return;
 
-  try {
-    await fetch(
-      `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: TELEGRAM_CHAT_ID,
-          text: msg,
-          parse_mode: "HTML"
-        })
-      }
-    );
-  } catch (err) {
-    console.log("Telegram error:", err.message);
-  }
+  await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: chatId, text: message })
+  });
 }
 
-/* =====================================================
+/* =========================
    GOOGLE SHEETS
-===================================================== */
+========================= */
 
-async function appendSheetRow(row) {
-  if (!GOOGLE_SERVICE_ACCOUNT_JSON || !SPREADSHEET_ID) return;
+async function appendSheet(row) {
+  const auth = new google.auth.GoogleAuth({
+    credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON),
+    scopes: ["https://www.googleapis.com/auth/spreadsheets"]
+  });
 
-  try {
-    const creds = JSON.parse(GOOGLE_SERVICE_ACCOUNT_JSON);
-    const auth = new google.auth.GoogleAuth({
-      credentials: creds,
-      scopes: ["https://www.googleapis.com/auth/spreadsheets"]
-    });
-
-    const sheets = google.sheets({
-      version: "v4",
-      auth: await auth.getClient()
-    });
-
-    await sheets.spreadsheets.values.append({
-      spreadsheetId: SPREADSHEET_ID,
-      range: `${SHEET_NAME}!A1`,
-      valueInputOption: "USER_ENTERED",
-      requestBody: { values: [row] }
-    });
-  } catch (err) {
-    console.log("Sheet error:", err.message);
-  }
+  const sheets = google.sheets({ version: "v4", auth });
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: process.env.SPREADSHEET_ID,
+    range: "Alerts!A1",
+    valueInputOption: "RAW",
+    requestBody: { values: [row] }
+  });
 }
 
-/* =====================================================
-   SAFE DYNAMIC UNIVERSE (CRITICAL FIX)
-===================================================== */
+/* =========================
+   DATA FETCH
+========================= */
 
 async function getDynamicUniverse() {
   try {
     const res = await yahooFinance.trendingSymbols("IN");
-
-    if (!res || !Array.isArray(res.quotes)) {
-      throw new Error("Invalid trendingSymbols response");
-    }
-
-    return res.quotes
-      .filter(q => typeof q.symbol === "string" && q.symbol.endsWith(".NS"))
-      .slice(0, 40)
-      .map(q => q.symbol);
-
-  } catch (err) {
+    const symbols = res?.quotes?.map(q => q.symbol + ".NS") || [];
+    if (symbols.length > 0) return symbols;
+  } catch (e) {
     console.log("⚠️ trendingSymbols failed – using fallback universe");
-
-    return [
-      "RELIANCE.NS","ICICIBANK.NS","HDFCBANK.NS","SBIN.NS","AXISBANK.NS",
-      "INFY.NS","TCS.NS","LT.NS","ITC.NS","BAJFINANCE.NS",
-      "HINDALCO.NS","TATASTEEL.NS","ONGC.NS","POWERGRID.NS",
-      "ADANIENT.NS","ADANIPORTS.NS","JSWSTEEL.NS","COALINDIA.NS",
-      "NTPC.NS","MARUTI.NS"
-    ];
   }
+  return FALLBACK_SYMBOLS;
 }
 
-/* =====================================================
-   DATA FETCH
-===================================================== */
-
-async function fetchData(symbol) {
+async function getHistorical(symbol) {
   try {
-    const c5 = await yahooFinance.chart(symbol, { interval: "5m", range: "2d" });
-    const c15 = await yahooFinance.chart(symbol, { interval: "15m", range: "1d" });
-    if (!c5?.quotes?.length || !c15?.quotes?.length) return null;
-    return { c5: c5.quotes, c15: c15.quotes };
-  } catch {
+    const to = new Date();
+    const from = new Date();
+    from.setDate(from.getDate() - LOOKBACK_DAYS);
+
+    const candles = await yahooFinance.historical(symbol, {
+      period1: from,
+      period2: to,
+      interval: INTERVAL
+    });
+
+    if (!candles || candles.length < 60) return null;
+    return candles;
+  } catch (e) {
+    console.log(`❌ Historical failed for ${symbol}`);
     return null;
   }
 }
 
-/* =====================================================
-   MOMENTUM DETECTOR
-===================================================== */
+/* =========================
+   STRATEGY LOGIC
+========================= */
 
-function isMomentumStock(candles) {
+function isMomentum(candles) {
   const closes = candles.map(c => c.close);
-  const highs = candles.map(c => c.high);
-  const lows = candles.map(c => c.low);
   const volumes = candles.map(c => c.volume);
 
-  const adxArr = technicalIndicators.ADX.calculate({
-    high: highs, low: lows, close: closes, period: 14
-  });
+  const ema9 = EMA.calculate({ period: 9, values: closes });
+  const ema21 = EMA.calculate({ period: 21, values: closes });
+  const rsi = RSI.calculate({ period: 14, values: closes });
 
-  const atrArr = technicalIndicators.ATR.calculate({
-    high: highs, low: lows, close: closes, period: 14
-  });
-
-  const avgVol = technicalIndicators.SMA.calculate({
-    period: 20, values: volumes
-  });
-
-  if (!adxArr.length || !atrArr.length || !avgVol.length) return false;
-
-  const last = candles.at(-1);
-  const prev = candles.at(-2);
+  const last = closes.length - 1;
+  const volAvg = volumes.slice(-20).reduce((a,b)=>a+b,0)/20;
 
   let score = 0;
+  if (ema9[last-8] > ema21[last-8]) score++;
+  if (rsi[rsi.length-1] > 50) score++;
+  if (volumes[last] > volAvg * MIN_VOLUME_SPIKE) score++;
 
-  if (Math.abs((last.close - prev.close) / prev.close) >= 0.008) score++;
-  if (last.volume >= avgVol.at(-1) * MOMENTUM_VOLUME) score++;
-  if ((atrArr.at(-1) / last.close) >= ATR_PCT_THRESHOLD) score++;
-  if (adxArr.at(-1).adx >= MOMENTUM_ADX) score++;
-
-  return score >= 2;
+  return score >= 1; // BALANCED → ACTIVE
 }
 
-/* =====================================================
-   SIGNAL + TRADE LEVELS
-===================================================== */
-
-function checkSignal(symbol, orb, candles) {
+function checkSignal(symbol, candles) {
   const closes = candles.map(c => c.close);
   const highs = candles.map(c => c.high);
   const lows = candles.map(c => c.low);
-  const volumes = candles.map(c => c.volume);
 
-  const ema20 = technicalIndicators.EMA.calculate({ period: 20, values: closes });
-  const ema50 = technicalIndicators.EMA.calculate({ period: 50, values: closes });
-  const adxArr = technicalIndicators.ADX.calculate({
-    high: highs, low: lows, close: closes, period: 14
+  const ema9 = EMA.calculate({ period: 9, values: closes });
+  const ema21 = EMA.calculate({ period: 21, values: closes });
+  const adx = ADX.calculate({
+    high: highs,
+    low: lows,
+    close: closes,
+    period: 14
   });
-  const avgVol = technicalIndicators.SMA.calculate({
-    period: 20, values: volumes
-  });
 
-  if (!ema20.length || !ema50.length || !adxArr.length || !avgVol.length) return null;
+  const last = closes.length - 1;
+  const price = closes[last];
+  const trendUp = ema9[last-8] > ema21[last-8];
+  const strongTrend = adx[adx.length-1]?.adx > 18;
 
-  const last = candles.at(-1);
+  if (!strongTrend) return null;
 
-  const trendUp = ema20.at(-1) >= ema50.at(-1);
-  const trendDown = ema20.at(-1) <= ema50.at(-1);
+  if (trendUp && price > ema9[last-8]) {
+    const sl = Math.min(...lows.slice(-10));
+    return buildTrade("BUY", price, sl, symbol);
+  }
 
-  const strongADX = adxArr.at(-1).adx >= ADX_THRESHOLD;
-  const volumeSpike = last.volume >= avgVol.at(-1) * VOLUME_MULTIPLIER;
+  if (!trendUp && price < ema9[last-8]) {
+    const sl = Math.max(...highs.slice(-10));
+    return buildTrade("SELL", price, sl, symbol);
+  }
 
-  const buyStrength =
-    last.close > orb.high * (1 + ORB_BUFFER) ||
-    (last.close > ema20.at(-1) && last.close > ema50.at(-1));
+  return null;
+}
 
-  const sellStrength =
-    last.close < orb.low * (1 - ORB_BUFFER) ||
-    (last.close < ema20.at(-1) && last.close < ema50.at(-1));
-
-  let signal = null;
-  if (buyStrength && trendUp && (strongADX || volumeSpike)) signal = "BUY";
-  if (sellStrength && trendDown && (strongADX || volumeSpike)) signal = "SELL";
-  if (!signal) return null;
-
-  const entry = last.close;
-  const sl = signal === "BUY"
-    ? Math.min(orb.low, ema20.at(-1))
-    : Math.max(orb.high, ema20.at(-1));
-
-  const risk = Math.abs(entry - sl);
-
+function buildTrade(side, price, sl, symbol) {
+  const risk = Math.abs(price - sl);
   return {
-    signal,
-    entry,
-    sl,
-    target1: signal === "BUY" ? entry + risk : entry - risk,
-    target2: signal === "BUY" ? entry + risk * 2 : entry - risk * 2,
-    time: new Date(last.date).toLocaleTimeString(),
-    reason: signal === "BUY"
-      ? "Momentum breakout + EMA trend"
-      : "Momentum breakdown + EMA trend"
+    symbol,
+    side,
+    price: price.toFixed(2),
+    sl: sl.toFixed(2),
+    t1: (side==="BUY"?price+risk:price-risk).toFixed(2),
+    t2: (side==="BUY"?price+2*risk:price-2*risk).toFixed(2),
+    reason: "EMA trend + ADX strength",
+    time: new Date().toLocaleTimeString("en-IN")
   };
 }
 
-/* =====================================================
-   MAIN
-===================================================== */
+/* =========================
+   MAIN SCANNER
+========================= */
 
 async function runScanner() {
-  const now = new Date();
-  const h = now.getHours();
-  const m = now.getMinutes();
-
-  // NSE market hours
-  if (h < 9 || (h === 9 && m < 16) || h > 15) return;
+  console.log("🚀 Scanner started");
 
   const symbols = await getDynamicUniverse();
+  console.log(`📊 Symbols fetched: ${symbols.length}`);
+
+  let signals = 0;
 
   for (const symbol of symbols) {
-    const data = await fetchData(symbol);
-    if (!data) continue;
+    if (signals >= MAX_SIGNALS_PER_RUN) break;
 
-    if (!isMomentumStock(data.c5)) continue;
+    const candles = await getHistorical(symbol);
+    if (!candles) continue;
 
-    const orb = {
-      high: data.c15[0].high,
-      low: data.c15[0].low
-    };
+    const momentum = isMomentum(candles);
+    console.log(`🔍 ${symbol} momentum = ${momentum}`);
+    if (!momentum) continue;
 
-    const trade = checkSignal(symbol, orb, data.c5);
+    const trade = checkSignal(symbol, candles);
+    console.log(`📈 ${symbol} signal = ${trade ? trade.side : "NO"}`);
+
     if (!trade) continue;
 
+    signals++;
+
     const msg = `
-${trade.signal === "BUY" ? "📈 BUY" : "📉 SELL"} – MOMENTUM TRADE
-
-<b>Stock:</b> ${symbol}
-<b>Time:</b> ${trade.time}
-
-<b>Entry:</b> ${trade.entry.toFixed(2)}
-<b>Stop Loss:</b> ${trade.sl.toFixed(2)}
-
-<b>Target 1:</b> ${trade.target1.toFixed(2)}
-<b>Target 2:</b> ${trade.target2.toFixed(2)}
-
-<b>Reason:</b> ${trade.reason}
-    `;
+📢 ${trade.side} ${trade.symbol}
+⏰ ${trade.time}
+💰 CMP: ${trade.price}
+🎯 T1: ${trade.t1}
+🎯 T2: ${trade.t2}
+🛑 SL: ${trade.sl}
+📌 ${trade.reason}
+`;
 
     await sendTelegram(msg);
-    await appendSheetRow([
-      now.toLocaleString(),
-      symbol,
-      trade.signal,
-      trade.entry,
-      trade.sl,
-      trade.target1,
-      trade.target2,
-      trade.reason
+    await appendSheet([
+      trade.time, trade.symbol, trade.side,
+      trade.price, trade.sl, trade.t1, trade.t2, trade.reason
     ]);
+
+    console.log("✅ TRADE SENT:", trade.symbol);
   }
+
+  console.log(`🏁 Scanner completed | Signals: ${signals}`);
 }
 
-runScanner();
+/* =========================
+   START
+========================= */
+
+runScanner().catch(err => {
+  console.error("🔥 Scanner crashed", err);
+  process.exit(1);
+});
