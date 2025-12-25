@@ -6,8 +6,8 @@ import fetch from "node-fetch";
    CONFIG
 ========================= */
 
-const INTERVAL = "5m";
-const LOOKBACK_DAYS = 10;
+const INTERVAL = "5m";          // intraday supported via chart()
+const RANGE = "5d";             // enough candles for EMA/ADX
 const MAX_SIGNALS_PER_RUN = 4;
 const MARKET_CLOSE_HOUR = 15;
 const MARKET_CLOSE_MIN = 20;
@@ -29,7 +29,7 @@ const FALLBACK_SYMBOLS = [
 ];
 
 /* =========================
-   STATE (IN-MEMORY)
+   STATE (PER RUN)
 ========================= */
 
 let allCalls = [];   // {symbol, side, confidence}
@@ -56,13 +56,12 @@ async function sendTelegram(message) {
 
 async function getMarketTrend() {
   try {
-    const data = await yahooFinance.historical("^NSEI", {
-      period1: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000),
-      period2: new Date(),
-      interval: "15m"
+    const chart = await yahooFinance.chart("^NSEI", {
+      interval: "15m",
+      range: "5d"
     });
 
-    const closes = data.map(c => c.close);
+    const closes = chart.quotes.map(q => q.close);
     const ema20 = EMA.calculate({ period: 20, values: closes });
 
     return closes.at(-1) > ema20.at(-1)
@@ -90,21 +89,18 @@ async function getDynamicUniverse() {
 }
 
 /* =========================
-   DATA
+   DATA (INTRADAY)
 ========================= */
 
-async function getHistorical(symbol) {
+async function getCandles(symbol) {
   try {
-    const from = new Date();
-    from.setDate(from.getDate() - LOOKBACK_DAYS);
-
-    const candles = await yahooFinance.historical(symbol, {
-      period1: from,
-      period2: new Date(),
-      interval: INTERVAL
+    const chart = await yahooFinance.chart(symbol, {
+      interval: INTERVAL,
+      range: RANGE
     });
 
-    return candles?.length > 50 ? candles : null;
+    const candles = chart?.quotes;
+    return candles && candles.length > 60 ? candles : null;
   } catch {
     return null;
   }
@@ -122,26 +118,29 @@ function checkSignal(symbol, candles, marketTrend) {
   const ema9 = EMA.calculate({ period: 9, values: closes });
   const ema21 = EMA.calculate({ period: 21, values: closes });
   const adx = ADX.calculate({
-    high: highs, low: lows, close: closes, period: 14
+    high: highs,
+    low: lows,
+    close: closes,
+    period: 14
   });
 
-  const last = closes.length - 1;
-  const price = closes[last];
+  const price = closes.at(-1);
   const trendUp = ema9.at(-1) > ema21.at(-1);
   const strongTrend = adx.at(-1)?.adx > 20;
 
-  let confidencePoints = 0;
-  if (trendUp) confidencePoints++;
-  if (strongTrend) confidencePoints++;
+  let confidenceScore = 0;
+  if (trendUp) confidenceScore++;
+  if (strongTrend) confidenceScore++;
   if (
     (trendUp && marketTrend === "BULLISH") ||
     (!trendUp && marketTrend === "BEARISH")
-  ) confidencePoints++;
+  ) confidenceScore++;
 
-  const confidence = confidencePoints >= 3 ? "HIGH" : "MEDIUM";
-  if (confidencePoints < 2) return null;
+  if (confidenceScore < 2) return null;
 
+  const confidence = confidenceScore >= 3 ? "HIGH" : "MEDIUM";
   const side = trendUp ? "BUY" : "SELL";
+
   const sl = side === "BUY"
     ? Math.min(...lows.slice(-10))
     : Math.max(...highs.slice(-10));
@@ -151,16 +150,16 @@ function checkSignal(symbol, candles, marketTrend) {
   return {
     symbol,
     side,
+    confidence,
     price,
     sl,
     t1: side === "BUY" ? price + risk : price - risk,
-    t2: side === "BUY" ? price + risk * 2 : price - risk * 2,
-    confidence
+    t2: side === "BUY" ? price + risk * 2 : price - risk * 2
   };
 }
 
 /* =========================
-   END-OF-DAY SUMMARY
+   END OF DAY SUMMARY
 ========================= */
 
 async function sendEODSummary(marketTrend) {
@@ -200,14 +199,18 @@ async function runScanner() {
   for (const symbol of symbols) {
     if (signals >= MAX_SIGNALS_PER_RUN) break;
 
-    const candles = await getHistorical(symbol);
+    const candles = await getCandles(symbol);
     if (!candles) continue;
 
     const trade = checkSignal(symbol, candles, marketTrend);
     if (!trade) continue;
 
     signals++;
-    allCalls.push({ symbol: trade.symbol, side: trade.side, confidence: trade.confidence });
+    allCalls.push({
+      symbol: trade.symbol,
+      side: trade.side,
+      confidence: trade.confidence
+    });
 
     const msg = `
 📢 ${trade.side} ${trade.symbol}
