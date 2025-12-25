@@ -3,8 +3,9 @@ import { EMA, ADX } from "technicalindicators";
 import fetch from "node-fetch";
 
 /* =========================
-   SUPPRESS BROKEN YAHOO WARNINGS
+   YAHOO FIXES (VERY IMPORTANT)
 ========================= */
+
 yahooFinance.suppressNotices([
   "ripHistorical",
   "validation"
@@ -14,8 +15,8 @@ yahooFinance.suppressNotices([
    CONFIG
 ========================= */
 
-const INTERVAL = "5m";      // intraday
-const RANGE = "5d";         // enough candles
+const INTERVAL = "5m";          // supported by chart()
+const RANGE = "5d";
 const MAX_SIGNALS_PER_RUN = 4;
 
 const MARKET_CLOSE_HOUR = 15;
@@ -42,10 +43,10 @@ const FALLBACK_SYMBOLS = [
 ];
 
 /* =========================
-   STATE
+   STATE (PER RUN)
 ========================= */
 
-let allCalls = [];
+let allCalls = [];   // { symbol, side, confidence }
 
 /* =========================
    TELEGRAM
@@ -61,8 +62,7 @@ async function sendTelegram(message) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       chat_id: chatId,
-      text: message,
-      parse_mode: "Markdown"
+      text: message
     })
   });
 }
@@ -84,31 +84,29 @@ async function getMarketTrend() {
     return closes.at(-1) > ema20.at(-1)
       ? "BULLISH"
       : "BEARISH";
-  } catch (e) {
-    console.log("⚠️ NIFTY trend fetch failed");
+  } catch {
     return "SIDEWAYS";
   }
 }
 
 /* =========================
-   DYNAMIC UNIVERSE
+   SYMBOL UNIVERSE
 ========================= */
 
-async function getDynamicUniverse() {
+async function getUniverse() {
   try {
     const res = await yahooFinance.trendingSymbols("IN");
     return res.quotes
       .map(q => q.symbol)
       .filter(s => s.endsWith(".NS"))
-      .slice(0, 25);
+      .slice(0, 20);
   } catch {
-    console.log("⚠️ Trending symbols failed, using fallback list");
     return FALLBACK_SYMBOLS;
   }
 }
 
 /* =========================
-   CANDLE FETCH
+   CANDLES
 ========================= */
 
 async function getCandles(symbol) {
@@ -118,10 +116,9 @@ async function getCandles(symbol) {
       range: RANGE
     });
 
-    const candles = chart?.quotes;
-    if (!candles || candles.length < 60) return null;
-
-    return candles;
+    return chart.quotes && chart.quotes.length > 50
+      ? chart.quotes
+      : null;
   } catch {
     return null;
   }
@@ -133,23 +130,21 @@ async function getCandles(symbol) {
 
 function checkSignal(symbol, candles, marketTrend) {
   const closes = candles.map(c => c.close);
-  const highs = candles.map(c => c.high);
-  const lows = candles.map(c => c.low);
+  const highs  = candles.map(c => c.high);
+  const lows   = candles.map(c => c.low);
 
-  const ema9 = EMA.calculate({ period: 9, values: closes });
+  const ema9  = EMA.calculate({ period: 9, values: closes });
   const ema21 = EMA.calculate({ period: 21, values: closes });
-  const adx = ADX.calculate({
+  const adx   = ADX.calculate({
     high: highs,
     low: lows,
     close: closes,
     period: 14
   });
 
-  if (!ema9.length || !ema21.length || !adx.length) return null;
-
   const price = closes.at(-1);
   const trendUp = ema9.at(-1) > ema21.at(-1);
-  const strongTrend = adx.at(-1)?.adx > 20;
+  const strongTrend = adx.at(-1)?.adx > 18;
 
   let score = 0;
   if (trendUp) score++;
@@ -159,10 +154,10 @@ function checkSignal(symbol, candles, marketTrend) {
     (!trendUp && marketTrend === "BEARISH")
   ) score++;
 
-  if (score < 2) return null;
+  if (score < 1) return null;
 
+  const confidence = score >= 3 ? "HIGH" : "MEDIUM";
   const side = trendUp ? "BUY" : "SELL";
-  const confidence = score === 3 ? "HIGH" : "MEDIUM";
 
   const sl = side === "BUY"
     ? Math.min(...lows.slice(-10))
@@ -186,42 +181,38 @@ function checkSignal(symbol, candles, marketTrend) {
 ========================= */
 
 async function sendEODSummary(marketTrend) {
-  if (!allCalls.length) return;
+  if (allCalls.length === 0) return;
 
-  const high = allCalls.filter(c => c.confidence === "HIGH");
-  const medium = allCalls.filter(c => c.confidence === "MEDIUM");
+  const passed = allCalls.filter(c => c.confidence === "HIGH");
+  const failed = allCalls.filter(c => c.confidence === "MEDIUM");
 
-  let msg = `📊 *END OF DAY SUMMARY*\n\n`;
+  let msg = `📊 END OF DAY SUMMARY\n\n`;
   msg += `Total Calls: ${allCalls.length}\n`;
-  msg += `✅ High Confidence: ${high.length}\n`;
-  msg += `⚠️ Medium Confidence: ${medium.length}\n\n`;
+  msg += `✅ High Confidence: ${passed.length}\n`;
+  msg += `⚠️ Medium Confidence: ${failed.length}\n\n`;
 
-  if (high.length) {
-    msg += `🟢 *High Confidence*\n`;
-    high.forEach(c => msg += `• ${c.symbol} (${c.side})\n`);
-    msg += `\n`;
+  if (passed.length) {
+    msg += `🟢 HIGH CONFIDENCE\n`;
+    passed.forEach(c => msg += `• ${c.symbol} (${c.side})\n`);
   }
 
-  if (medium.length) {
-    msg += `🟡 *Medium Confidence*\n`;
-    medium.forEach(c => msg += `• ${c.symbol} (${c.side})\n`);
-    msg += `\n`;
+  if (failed.length) {
+    msg += `\n🟡 MEDIUM CONFIDENCE\n`;
+    failed.forEach(c => msg += `• ${c.symbol} (${c.side})\n`);
   }
 
-  msg += `📈 Market Trend: *NIFTY ${marketTrend}*\n`;
-  msg += `🤖 Scanner Status: *STABLE*`;
-
+  msg += `\n📈 NIFTY Trend: ${marketTrend}`;
   await sendTelegram(msg);
 }
 
 /* =========================
-   MAIN RUNNER
+   MAIN
 ========================= */
 
 async function runScanner() {
   const now = new Date();
   const marketTrend = await getMarketTrend();
-  const symbols = await getDynamicUniverse();
+  const symbols = await getUniverse();
 
   let signals = 0;
 
@@ -241,7 +232,8 @@ async function runScanner() {
       confidence: trade.confidence
     });
 
-    const msg = `📢 *${trade.side} ${trade.symbol}*\n
+    const msg = `
+📢 ${trade.side} ${trade.symbol}
 ⏰ ${new Date().toLocaleTimeString("en-IN")}
 
 💰 Entry: ${trade.price.toFixed(2)}
@@ -251,10 +243,17 @@ async function runScanner() {
 🎯 T2: ${trade.t2.toFixed(2)}
 
 📊 R:R = 1 : 2
-📈 Market: *NIFTY ${marketTrend}*
-${trade.confidence === "HIGH" ? "✅" : "⚠️"} Confidence: *${trade.confidence}*`;
+📈 Market: NIFTY ${marketTrend}
+${trade.confidence === "HIGH" ? "✅" : "⚠️"} Confidence: ${trade.confidence}
+    `;
 
     await sendTelegram(msg);
+  }
+
+  if (signals === 0) {
+    await sendTelegram(
+      `ℹ️ No trade signals this run\n📈 Market: NIFTY ${marketTrend}`
+    );
   }
 
   if (
