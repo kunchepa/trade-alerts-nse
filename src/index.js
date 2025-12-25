@@ -3,36 +3,42 @@ import { EMA, ADX } from "technicalindicators";
 import fetch from "node-fetch";
 
 /* =========================
+   SUPPRESS BROKEN YAHOO WARNINGS
+========================= */
+yahooFinance.suppressNotices([
+  "ripHistorical",
+  "validation"
+]);
+
+/* =========================
    CONFIG
 ========================= */
 
-const INTERVAL = "5m";          // intraday supported via chart()
-const RANGE = "5d";             // enough candles for EMA/ADX
+const INTERVAL = "5m";      // intraday
+const RANGE = "5d";         // enough candles
 const MAX_SIGNALS_PER_RUN = 4;
+
 const MARKET_CLOSE_HOUR = 15;
 const MARKET_CLOSE_MIN = 20;
 
+/* =========================
+   FALLBACK UNIVERSE
+========================= */
+
 const FALLBACK_SYMBOLS = [
-  "RELIANCE.NS","TCS.NS","HDFCBANK.NS","INFY.NS","HDFC.NS","ICICIBANK.NS","KOTAKBANK.NS","LT.NS",
-  "SBIN.NS","AXISBANK.NS","BAJFINANCE.NS","BHARTIARTL.NS","ITC.NS","HINDUNILVR.NS","MARUTI.NS",
-  "SUNPHARMA.NS","BAJAJFINSV.NS","ASIANPAINT.NS","NESTLEIND.NS","TITAN.NS","ONGC.NS","POWERGRID.NS",
-  "ULTRACEMCO.NS","NTPC.NS","DRREDDY.NS","HCLTECH.NS","INDUSINDBK.NS","DIVISLAB.NS","ADANIPORTS.NS",
-  "JSWSTEEL.NS","COALINDIA.NS","ADANIENT.NS","M&M.NS","TATASTEEL.NS","GRASIM.NS","WIPRO.NS",
-  "HDFCLIFE.NS","TECHM.NS","SBILIFE.NS","BRITANNIA.NS","CIPLA.NS","EICHERMOT.NS","HINDALCO.NS",
-  "HEROMOTOCO.NS","BPCL.NS","SHREECEM.NS","IOC.NS","TATACONSUM.NS","UPL.NS","ADANIGREEN.NS",
-  "VEDL.NS","DLF.NS","PIDILITIND.NS","ICICIPRULI.NS","JSWENERGY.NS","BANKBARODA.NS","CANBK.NS",
-  "PNB.NS","UNIONBANK.NS","BANDHANBNK.NS","IDFCFIRSTB.NS","GAIL.NS","TATAPOWER.NS","TORNTPHARM.NS",
-  "ABB.NS","SIEMENS.NS","MUTHOOTFIN.NS","BAJAJ-AUTO.NS","PEL.NS","AMBUJACEM.NS","ACC.NS","BEL.NS",
-  "HAL.NS","IRCTC.NS","PAYTM.NS","POLYCAB.NS","ZOMATO.NS","NAUKRI.NS","BOSCHLTD.NS","ASHOKLEY.NS",
-  "TVSMOTOR.NS","MFSL.NS","CHOLAFIN.NS","INDIGO.NS","DABUR.NS","EMAMILTD.NS","MGL.NS","IGL.NS",
-  "LUPIN.NS","BIOCON.NS","APOLLOHOSP.NS","MAXHEALTH.NS","FORTIS.NS"
+  "RELIANCE.NS","TCS.NS","HDFCBANK.NS","INFY.NS","ICICIBANK.NS",
+  "SBIN.NS","AXISBANK.NS","BAJFINANCE.NS","ITC.NS","HINDUNILVR.NS",
+  "MARUTI.NS","SUNPHARMA.NS","TITAN.NS","LT.NS","ONGC.NS",
+  "POWERGRID.NS","NTPC.NS","ULTRACEMCO.NS","ADANIENT.NS","JSWSTEEL.NS",
+  "TATASTEEL.NS","WIPRO.NS","TECHM.NS","HCLTECH.NS","INDUSINDBK.NS",
+  "ZOMATO.NS","IRCTC.NS","HAL.NS","BEL.NS","DLF.NS"
 ];
 
 /* =========================
-   STATE (PER RUN)
+   STATE
 ========================= */
 
-let allCalls = [];   // {symbol, side, confidence}
+let allCalls = [];
 
 /* =========================
    TELEGRAM
@@ -46,7 +52,11 @@ async function sendTelegram(message) {
   await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, text: message })
+    body: JSON.stringify({
+      chat_id: chatId,
+      text: message,
+      parse_mode: "Markdown"
+    })
   });
 }
 
@@ -57,7 +67,7 @@ async function sendTelegram(message) {
 async function getMarketTrend() {
   try {
     const chart = await yahooFinance.chart("^NSEI", {
-      interval: "15m",
+      interval: "5m",
       range: "5d"
     });
 
@@ -67,13 +77,14 @@ async function getMarketTrend() {
     return closes.at(-1) > ema20.at(-1)
       ? "BULLISH"
       : "BEARISH";
-  } catch {
+  } catch (e) {
+    console.log("⚠️ NIFTY trend fetch failed");
     return "SIDEWAYS";
   }
 }
 
 /* =========================
-   UNIVERSE
+   DYNAMIC UNIVERSE
 ========================= */
 
 async function getDynamicUniverse() {
@@ -82,14 +93,15 @@ async function getDynamicUniverse() {
     return res.quotes
       .map(q => q.symbol)
       .filter(s => s.endsWith(".NS"))
-      .slice(0, 20);
+      .slice(0, 25);
   } catch {
+    console.log("⚠️ Trending symbols failed, using fallback list");
     return FALLBACK_SYMBOLS;
   }
 }
 
 /* =========================
-   DATA (INTRADAY)
+   CANDLE FETCH
 ========================= */
 
 async function getCandles(symbol) {
@@ -100,7 +112,9 @@ async function getCandles(symbol) {
     });
 
     const candles = chart?.quotes;
-    return candles && candles.length > 60 ? candles : null;
+    if (!candles || candles.length < 60) return null;
+
+    return candles;
   } catch {
     return null;
   }
@@ -124,22 +138,24 @@ function checkSignal(symbol, candles, marketTrend) {
     period: 14
   });
 
+  if (!ema9.length || !ema21.length || !adx.length) return null;
+
   const price = closes.at(-1);
   const trendUp = ema9.at(-1) > ema21.at(-1);
   const strongTrend = adx.at(-1)?.adx > 20;
 
-  let confidenceScore = 0;
-  if (trendUp) confidenceScore++;
-  if (strongTrend) confidenceScore++;
+  let score = 0;
+  if (trendUp) score++;
+  if (strongTrend) score++;
   if (
     (trendUp && marketTrend === "BULLISH") ||
     (!trendUp && marketTrend === "BEARISH")
-  ) confidenceScore++;
+  ) score++;
 
-  if (confidenceScore < 2) return null;
+  if (score < 2) return null;
 
-  const confidence = confidenceScore >= 3 ? "HIGH" : "MEDIUM";
   const side = trendUp ? "BUY" : "SELL";
+  const confidence = score === 3 ? "HIGH" : "MEDIUM";
 
   const sl = side === "BUY"
     ? Math.min(...lows.slice(-10))
@@ -163,30 +179,36 @@ function checkSignal(symbol, candles, marketTrend) {
 ========================= */
 
 async function sendEODSummary(marketTrend) {
-  if (allCalls.length === 0) return;
+  if (!allCalls.length) return;
 
-  const passed = allCalls.filter(c => c.confidence === "HIGH");
-  const failed = allCalls.filter(c => c.confidence === "MEDIUM");
+  const high = allCalls.filter(c => c.confidence === "HIGH");
+  const medium = allCalls.filter(c => c.confidence === "MEDIUM");
 
-  let msg = `📊 END OF DAY SUMMARY\n\n`;
+  let msg = `📊 *END OF DAY SUMMARY*\n\n`;
   msg += `Total Calls: ${allCalls.length}\n`;
-  msg += `✅ PASSED: ${passed.length}\n`;
-  msg += `❌ FAILED: ${failed.length}\n\n`;
+  msg += `✅ High Confidence: ${high.length}\n`;
+  msg += `⚠️ Medium Confidence: ${medium.length}\n\n`;
 
-  msg += `🟢 PASSED CALLS:\n`;
-  passed.forEach(c => msg += `• ${c.symbol} – ${c.side}\n`);
+  if (high.length) {
+    msg += `🟢 *High Confidence*\n`;
+    high.forEach(c => msg += `• ${c.symbol} (${c.side})\n`);
+    msg += `\n`;
+  }
 
-  msg += `\n🟡 FAILED CALLS:\n`;
-  failed.forEach(c => msg += `• ${c.symbol} – ${c.side}\n`);
+  if (medium.length) {
+    msg += `🟡 *Medium Confidence*\n`;
+    medium.forEach(c => msg += `• ${c.symbol} (${c.side})\n`);
+    msg += `\n`;
+  }
 
-  msg += `\n📈 Market Trend: NIFTY ${marketTrend}\n`;
-  msg += `🤖 Scanner Status: STABLE`;
+  msg += `📈 Market Trend: *NIFTY ${marketTrend}*\n`;
+  msg += `🤖 Scanner Status: *STABLE*`;
 
   await sendTelegram(msg);
 }
 
 /* =========================
-   MAIN
+   MAIN RUNNER
 ========================= */
 
 async function runScanner() {
@@ -212,8 +234,7 @@ async function runScanner() {
       confidence: trade.confidence
     });
 
-    const msg = `
-📢 ${trade.side} ${trade.symbol}
+    const msg = `📢 *${trade.side} ${trade.symbol}*\n
 ⏰ ${new Date().toLocaleTimeString("en-IN")}
 
 💰 Entry: ${trade.price.toFixed(2)}
@@ -223,9 +244,8 @@ async function runScanner() {
 🎯 T2: ${trade.t2.toFixed(2)}
 
 📊 R:R = 1 : 2
-📈 Market: NIFTY ${marketTrend}
-${trade.confidence === "HIGH" ? "✅" : "⚠️"} Confidence: ${trade.confidence}
-    `;
+📈 Market: *NIFTY ${marketTrend}*
+${trade.confidence === "HIGH" ? "✅" : "⚠️"} Confidence: *${trade.confidence}*`;
 
     await sendTelegram(msg);
   }
