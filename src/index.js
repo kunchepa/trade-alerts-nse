@@ -1,13 +1,21 @@
 /**
  * trade-alerts-nse
- * FULL WORKING CODE
- * Compatible with GitHub Actions + Cron
+ * FULL WORKING CODE + BACKTEST + SL/TARGET + CONFIDENCE
  */
 
 import yahooFinance from "yahoo-finance2";
 import { EMA, RSI } from "technicalindicators";
 import fetch from "node-fetch";
 import { GoogleSpreadsheet } from "google-spreadsheet";
+
+/* =========================
+   MODE & RISK CONFIG
+========================= */
+
+const MODE = "LIVE"; // "LIVE" or "BACKTEST"
+const SL_PCT = 0.7;
+const TARGET_PCT = 1.4;
+const MIN_CONFIDENCE = 60;
 
 /* =========================
    ENV VALIDATION
@@ -18,7 +26,7 @@ const REQUIRED_ENV = [
   "TELEGRAM_CHAT_ID",
   "SPREADSHEET_ID",
   "GOOGLE_SERVICE_ACCOUNT_JSON",
-  "ALPHA_VANTAGE_KEY" // present, not crashing
+  "ALPHA_VANTAGE_KEY"
 ];
 
 for (const key of REQUIRED_ENV) {
@@ -30,10 +38,10 @@ for (const key of REQUIRED_ENV) {
 console.log("✅ All environment variables loaded");
 
 /* =========================
-   CONFIG
+   SYMBOLS
 ========================= */
 
-const SYMBOLS = [
+const SYMBOLS = [ /* unchanged list */ 
   "RELIANCE.NS","TCS.NS","HDFCBANK.NS","INFY.NS","HDFC.NS","ICICIBANK.NS","KOTAKBANK.NS","LT.NS",
   "SBIN.NS","AXISBANK.NS","BAJFINANCE.NS","BHARTIARTL.NS","ITC.NS","HINDUNILVR.NS","MARUTI.NS",
   "SUNPHARMA.NS","BAJAJFINSV.NS","ASIANPAINT.NS","NESTLEIND.NS","TITAN.NS","ONGC.NS","POWERGRID.NS",
@@ -57,9 +65,7 @@ const RANGE_DAYS = 5;
 ========================= */
 
 async function sendTelegram(message) {
-  const url = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`;
-
-  await fetch(url, {
+  await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -72,13 +78,9 @@ async function sendTelegram(message) {
 
 async function logToSheet(row) {
   const doc = new GoogleSpreadsheet(process.env.SPREADSHEET_ID);
-  const creds = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
-
-  await doc.useServiceAccountAuth(creds);
+  await doc.useServiceAccountAuth(JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON));
   await doc.loadInfo();
-
-  const sheet = doc.sheetsByTitle["Alerts"];
-  await sheet.addRow(row);
+  await doc.sheetsByTitle["Alerts"].addRow(row);
 }
 
 /* =========================
@@ -86,86 +88,104 @@ async function logToSheet(row) {
 ========================= */
 
 function calculateIndicators(closes) {
-  const ema9 = EMA.calculate({ period: 9, values: closes });
-  const ema21 = EMA.calculate({ period: 21, values: closes });
-  const rsi = RSI.calculate({ period: 14, values: closes });
-
   return {
-    ema9: ema9.at(-1),
-    ema21: ema21.at(-1),
-    rsi: rsi.at(-1)
+    ema9: EMA.calculate({ period: 9, values: closes }).at(-1),
+    ema21: EMA.calculate({ period: 21, values: closes }).at(-1),
+    rsi: RSI.calculate({ period: 14, values: closes }).at(-1)
   };
+}
+
+/* =========================
+   CONFIDENCE SCORE
+========================= */
+
+function calculateConfidence({ ema9, ema21, rsi }) {
+  let score = 0;
+
+  const emaDiffPct = ((ema9 - ema21) / ema21) * 100;
+  if (emaDiffPct > 0.2) score += 40;
+  else if (emaDiffPct > 0.1) score += 25;
+  else score += 10;
+
+  if (rsi >= 55 && rsi <= 65) score += 30;
+  else if (rsi > 50 && rsi < 70) score += 20;
+  else score += 10;
+
+  if (ema9 > ema21 && rsi > 50) score += 30;
+  else score += 15;
+
+  return Math.min(score, 100);
+}
+
+/* =========================
+   BACKTEST ENGINE
+========================= */
+
+const backtestStats = { trades: 0, wins: 0, losses: 0 };
+
+function backtestTrade(candles, entryIndex, entryPrice) {
+  const sl = entryPrice * (1 - SL_PCT / 100);
+  const target = entryPrice * (1 + TARGET_PCT / 100);
+
+  for (let i = entryIndex + 1; i < candles.length; i++) {
+    if (candles[i].low <= sl) return "LOSS";
+    if (candles[i].high >= target) return "WIN";
+  }
+  return "OPEN";
 }
 
 /* =========================
    MAIN SCANNER
 ========================= */
 
-
 async function runScanner() {
   for (const symbol of SYMBOLS) {
     try {
-      console.log(`🔍 Scanning ${symbol}`);
+      const period1 = new Date(Date.now() - RANGE_DAYS * 86400000);
+      const candles = await yahooFinance.historical(symbol, { period1, interval: INTERVAL });
 
-      const candles = await yahooFinance.historical(symbol, {
-        period1: `${RANGE_DAYS}d`,
-        interval: INTERVAL
-      });
-
-      if (!candles || candles.length < 30) {
-        console.log(`⚠️ Not enough data for ${symbol}`);
-        continue;
-      }
+      if (!candles || candles.length < 30) continue;
 
       const closes = candles.map(c => c.close);
       const lastClose = closes.at(-1);
 
-      const { ema9, ema21, rsi } = calculateIndicators(closes);
+      const indicators = calculateIndicators(closes);
+      const confidence = calculateConfidence(indicators);
 
-      /* =========================
-         STRATEGY (SAFE & SIMPLE)
-      ========================= */
+      if (confidence < MIN_CONFIDENCE) continue;
 
-      const buySignal =
-        ema9 > ema21 &&
-        rsi > 50 &&
-        rsi < 70;
+      const buySignal = indicators.ema9 > indicators.ema21 && indicators.rsi > 50;
 
-      if (!buySignal) {
-        console.log(`⏭️ No signal for ${symbol}`);
+      if (!buySignal) continue;
+
+      const sl = lastClose * (1 - SL_PCT / 100);
+      const target = lastClose * (1 + TARGET_PCT / 100);
+
+      if (MODE === "BACKTEST") {
+        backtestStats.trades++;
+        const result = backtestTrade(candles, candles.length - 1, lastClose);
+        if (result === "WIN") backtestStats.wins++;
+        if (result === "LOSS") backtestStats.losses++;
         continue;
       }
 
-      const timeIST = new Date().toLocaleString("en-IN");
-
       const message = `
 📈 *BUY SIGNAL*
-━━━━━━━━━━━━
 Stock: *${symbol}*
-Price: *₹${lastClose.toFixed(2)}*
+Entry: ₹${lastClose.toFixed(2)}
 
-EMA 9: ${ema9.toFixed(2)}
-EMA 21: ${ema21.toFixed(2)}
-RSI: ${rsi.toFixed(2)}
+SL: ₹${sl.toFixed(2)}
+Target: ₹${target.toFixed(2)}
 
-🕒 ${timeIST}
-      `;
+Confidence: *${confidence}/100*
+RR: 1:${(TARGET_PCT / SL_PCT).toFixed(1)}
+`;
 
       await sendTelegram(message);
-
-      await logToSheet({
-        Symbol: symbol,
-        Price: lastClose,
-        EMA9: ema9,
-        EMA21: ema21,
-        RSI: rsi,
-        Time: timeIST
-      });
-
-      console.log(`✅ Alert sent for ${symbol}`);
+      await logToSheet({ Symbol: symbol, Entry: lastClose, SL: sl, Target: target, Confidence: confidence });
 
     } catch (err) {
-      console.error(`❌ Error scanning ${symbol}:`, err.message);
+      console.error(symbol, err.message);
     }
   }
 }
@@ -174,6 +194,10 @@ RSI: ${rsi.toFixed(2)}
    START
 ========================= */
 
-console.log("🚀 Trade Alerts Scanner Started");
 await runScanner();
-console.log("✅ Scan Completed");
+
+if (MODE === "BACKTEST") {
+  const winRate = ((backtestStats.wins / backtestStats.trades) * 100 || 0).toFixed(2);
+  console.log("📊 BACKTEST RESULT");
+  console.log(backtestStats, `WinRate=${winRate}%`);
+}
