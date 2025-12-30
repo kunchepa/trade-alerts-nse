@@ -101,7 +101,6 @@ function calculateIndicators(closes) {
    MAIN SCANNER
 ========================= */
 
-yahooFinance.suppressNotices(["ripHistorical", "validation"]);
 
 async function runScanner() {
   for (const symbol of SYMBOLS) {
