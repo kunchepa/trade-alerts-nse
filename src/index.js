@@ -1,12 +1,12 @@
 /**
  * trade-alerts-nse
- * FINAL VERSION with DUPLICATE ALERT PROTECTION
+ * FINAL VERSION with DUPLICATE ALERT PROTECTION (FIXED)
  */
 
 import YahooFinance from "yahoo-finance2";
 import { EMA, RSI } from "technicalindicators";
 import fetch from "node-fetch";
-import { GoogleSpreadsheet } from "google-spreadsheet";
+import GoogleSpreadsheet from "google-spreadsheet";
 
 /* =========================
    YAHOO FINANCE CLIENT
@@ -50,19 +50,10 @@ console.log("✅ All environment variables loaded");
 ========================= */
 
 const SYMBOLS = [
-  "RELIANCE.NS","TCS.NS","HDFCBANK.NS","INFY.NS","HDFC.NS","ICICIBANK.NS","KOTAKBANK.NS","LT.NS",
-  "SBIN.NS","AXISBANK.NS","BAJFINANCE.NS","BHARTIARTL.NS","ITC.NS","HINDUNILVR.NS","MARUTI.NS",
-  "SUNPHARMA.NS","BAJAJFINSV.NS","ASIANPAINT.NS","NESTLEIND.NS","TITAN.NS","ONGC.NS","POWERGRID.NS",
-  "ULTRACEMCO.NS","NTPC.NS","DRREDDY.NS","HCLTECH.NS","INDUSINDBK.NS","DIVISLAB.NS","ADANIPORTS.NS",
-  "JSWSTEEL.NS","COALINDIA.NS","ADANIENT.NS","M&M.NS","TATASTEEL.NS","GRASIM.NS","WIPRO.NS",
-  "HDFCLIFE.NS","TECHM.NS","SBILIFE.NS","BRITANNIA.NS","CIPLA.NS","EICHERMOT.NS","HINDALCO.NS",
-  "HEROMOTOCO.NS","BPCL.NS","SHREECEM.NS","IOC.NS","TATACONSUM.NS","UPL.NS","ADANIGREEN.NS",
-  "VEDL.NS","DLF.NS","PIDILITIND.NS","ICICIPRULI.NS","JSWENERGY.NS","BANKBARODA.NS","CANBK.NS",
-  "PNB.NS","UNIONBANK.NS","BANDHANBNK.NS","IDFCFIRSTB.NS","GAIL.NS","TATAPOWER.NS","TORNTPHARM.NS",
-  "ABB.NS","SIEMENS.NS","MUTHOOTFIN.NS","BAJAJ-AUTO.NS","PEL.NS","AMBUJACEM.NS","ACC.NS","BEL.NS",
-  "HAL.NS","IRCTC.NS","PAYTM.NS","POLYCAB.NS","ZOMATO.NS","NAUKRI.NS","BOSCHLTD.NS","ASHOKLEY.NS",
-  "TVSMOTOR.NS","MFSL.NS","CHOLAFIN.NS","INDIGO.NS","DABUR.NS","EMAMILTD.NS","MGL.NS","IGL.NS",
-  "LUPIN.NS","BIOCON.NS","APOLLOHOSP.NS","MAXHEALTH.NS","FORTIS.NS"
+  "RELIANCE.NS","TCS.NS","HDFCBANK.NS","INFY.NS","ICICIBANK.NS","LT.NS",
+  "SBIN.NS","AXISBANK.NS","BAJFINANCE.NS","ITC.NS","MARUTI.NS",
+  "SUNPHARMA.NS","ASIANPAINT.NS","TITAN.NS","ONGC.NS","NTPC.NS",
+  "HCLTECH.NS","ADANIPORTS.NS","JSWSTEEL.NS","TATASTEEL.NS","WIPRO.NS"
 ];
 
 /* =========================
@@ -71,7 +62,11 @@ const SYMBOLS = [
 
 async function getSheet() {
   const doc = new GoogleSpreadsheet(process.env.SPREADSHEET_ID);
-  await doc.useServiceAccountAuth(JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON));
+
+  await doc.useServiceAccountAuth(
+    JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON)
+  );
+
   await doc.loadInfo();
   return doc.sheetsByTitle["Alerts"];
 }
@@ -145,7 +140,7 @@ async function runScanner() {
       if (!candles || candles.length < 30) continue;
 
       const lastCandle = candles.at(-1);
-      const candleTime = lastCandle.date.getTime(); // unique candle id
+      const candleTime = lastCandle.date.getTime();
 
       const closes = candles.map(c => c.close).filter(Boolean);
       if (closes.length < 30) continue;
@@ -159,10 +154,9 @@ async function runScanner() {
       const buySignal = indicators.ema9 > indicators.ema21 && indicators.rsi > 50;
       if (!buySignal) continue;
 
-      /* 🔒 DUPLICATE ALERT CHECK */
       const duplicate = await hasDuplicateAlert(sheet, symbol, candleTime);
       if (duplicate) {
-        console.log(`⏭️ Skipping duplicate alert for ${symbol}`);
+        console.log(`⏭️ Duplicate skipped: ${symbol}`);
         continue;
       }
 
