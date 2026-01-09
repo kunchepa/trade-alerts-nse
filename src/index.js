@@ -1,12 +1,16 @@
 /**
  * trade-alerts-nse
- * FINAL VERSION with DUPLICATE ALERT PROTECTION (FIXED)
+ * FINAL VERSION with DUPLICATE ALERT PROTECTION (STABLE)
  */
 
 import YahooFinance from "yahoo-finance2";
 import { EMA, RSI } from "technicalindicators";
 import fetch from "node-fetch";
-import GoogleSpreadsheet from "google-spreadsheet";
+import { createRequire } from "module";
+
+/* 🔧 FIX: Load CommonJS library safely */
+const require = createRequire(import.meta.url);
+const { GoogleSpreadsheet } = require("google-spreadsheet");
 
 /* =========================
    YAHOO FINANCE CLIENT
@@ -18,7 +22,6 @@ const yahooFinance = new YahooFinance();
    CONFIG
 ========================= */
 
-const MODE = "LIVE";
 const SL_PCT = 0.7;
 const TARGET_PCT = 1.4;
 const MIN_CONFIDENCE = 60;
@@ -52,8 +55,7 @@ console.log("✅ All environment variables loaded");
 const SYMBOLS = [
   "RELIANCE.NS","TCS.NS","HDFCBANK.NS","INFY.NS","ICICIBANK.NS","LT.NS",
   "SBIN.NS","AXISBANK.NS","BAJFINANCE.NS","ITC.NS","MARUTI.NS",
-  "SUNPHARMA.NS","ASIANPAINT.NS","TITAN.NS","ONGC.NS","NTPC.NS",
-  "HCLTECH.NS","ADANIPORTS.NS","JSWSTEEL.NS","TATASTEEL.NS","WIPRO.NS"
+  "SUNPHARMA.NS","ASIANPAINT.NS","TITAN.NS","ONGC.NS","NTPC.NS"
 ];
 
 /* =========================
@@ -73,7 +75,6 @@ async function getSheet() {
 
 async function hasDuplicateAlert(sheet, symbol, candleTime) {
   const rows = await sheet.getRows({ limit: 50 });
-
   return rows.some(
     r =>
       r.Symbol === symbol &&
@@ -151,11 +152,7 @@ async function runScanner() {
       const confidence = calculateConfidence(indicators);
       if (confidence < MIN_CONFIDENCE) continue;
 
-      const buySignal = indicators.ema9 > indicators.ema21 && indicators.rsi > 50;
-      if (!buySignal) continue;
-
-      const duplicate = await hasDuplicateAlert(sheet, symbol, candleTime);
-      if (duplicate) {
+      if (await hasDuplicateAlert(sheet, symbol, candleTime)) {
         console.log(`⏭️ Duplicate skipped: ${symbol}`);
         continue;
       }
