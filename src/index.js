@@ -1,33 +1,27 @@
 /**
  * trade-alerts-nse
- * FINAL VERSION with DUPLICATE ALERT PROTECTION (STABLE)
+ * FINAL WORKING VERSION (yahoo-finance2 v3 compatible)
  */
 
 import YahooFinance from "yahoo-finance2";
 import { EMA, RSI } from "technicalindicators";
 import fetch from "node-fetch";
-import { createRequire } from "module";
-
-/* 🔧 FIX: Load CommonJS library safely */
-const require = createRequire(import.meta.url);
-const { GoogleSpreadsheet } = require("google-spreadsheet");
+import { GoogleSpreadsheet } from "google-spreadsheet";
 
 /* =========================
-   YAHOO FINANCE CLIENT
+   YAHOO CLIENT (v3)
 ========================= */
 
 const yahooFinance = new YahooFinance();
 
 /* =========================
-   CONFIG
+   MODE & RISK CONFIG
 ========================= */
 
+const MODE = "LIVE"; // "LIVE" or "BACKTEST"
 const SL_PCT = 0.7;
 const TARGET_PCT = 1.4;
 const MIN_CONFIDENCE = 60;
-
-const INTERVAL = "5m";
-const LOOKBACK_DAYS = 5;
 
 /* =========================
    ENV VALIDATION
@@ -55,36 +49,15 @@ console.log("✅ All environment variables loaded");
 const SYMBOLS = [
   "RELIANCE.NS","TCS.NS","HDFCBANK.NS","INFY.NS","ICICIBANK.NS","LT.NS",
   "SBIN.NS","AXISBANK.NS","BAJFINANCE.NS","ITC.NS","MARUTI.NS",
-  "SUNPHARMA.NS","ASIANPAINT.NS","TITAN.NS","ONGC.NS","NTPC.NS"
+  "SUNPHARMA.NS","ASIANPAINT.NS","TITAN.NS","ONGC.NS","NTPC.NS",
+  "HCLTECH.NS","ADANIPORTS.NS","JSWSTEEL.NS","TATASTEEL.NS","WIPRO.NS"
 ];
 
-/* =========================
-   GOOGLE SHEET HELPERS
-========================= */
-
-async function getSheet() {
-  const doc = new GoogleSpreadsheet(process.env.SPREADSHEET_ID);
-
-  await doc.useServiceAccountAuth(
-    JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON)
-  );
-
-  await doc.loadInfo();
-  return doc.sheetsByTitle["Alerts"];
-}
-
-async function hasDuplicateAlert(sheet, symbol, candleTime) {
-  const rows = await sheet.getRows({ limit: 50 });
-  return rows.some(
-    r =>
-      r.Symbol === symbol &&
-      r.CandleTime === String(candleTime) &&
-      r.Signal === "BUY"
-  );
-}
+const INTERVAL = "5m";
+const LOOKBACK_DAYS = 5;
 
 /* =========================
-   TELEGRAM
+   HELPERS
 ========================= */
 
 async function sendTelegram(message) {
@@ -99,6 +72,13 @@ async function sendTelegram(message) {
   });
 }
 
+async function logToSheet(row) {
+  const doc = new GoogleSpreadsheet(process.env.SPREADSHEET_ID);
+  await doc.useServiceAccountAuth(JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON));
+  await doc.loadInfo();
+  await doc.sheetsByTitle["Alerts"].addRow(row);
+}
+
 /* =========================
    INDICATORS
 ========================= */
@@ -111,11 +91,17 @@ function calculateIndicators(closes) {
   };
 }
 
+/* =========================
+   CONFIDENCE SCORE
+========================= */
+
 function calculateConfidence({ ema9, ema21, rsi }) {
   let score = 0;
+
   if (ema9 > ema21) score += 40;
   if (rsi > 55 && rsi < 70) score += 30;
   if (ema9 > ema21 && rsi > 50) score += 30;
+
   return Math.min(score, 100);
 }
 
@@ -124,8 +110,6 @@ function calculateConfidence({ ema9, ema21, rsi }) {
 ========================= */
 
 async function runScanner() {
-  const sheet = await getSheet();
-
   const period2 = Math.floor(Date.now() / 1000);
   const period1 = period2 - LOOKBACK_DAYS * 24 * 60 * 60;
 
@@ -140,31 +124,27 @@ async function runScanner() {
       const candles = result?.quotes;
       if (!candles || candles.length < 30) continue;
 
-      const lastCandle = candles.at(-1);
-      const candleTime = lastCandle.date.getTime();
-
       const closes = candles.map(c => c.close).filter(Boolean);
       if (closes.length < 30) continue;
 
+      const lastClose = closes.at(-1);
       const indicators = calculateIndicators(closes);
+
       if (!indicators.ema9 || !indicators.ema21 || !indicators.rsi) continue;
 
       const confidence = calculateConfidence(indicators);
       if (confidence < MIN_CONFIDENCE) continue;
 
-      if (await hasDuplicateAlert(sheet, symbol, candleTime)) {
-        console.log(`⏭️ Duplicate skipped: ${symbol}`);
-        continue;
-      }
+      const buySignal = indicators.ema9 > indicators.ema21 && indicators.rsi > 50;
+      if (!buySignal) continue;
 
-      const entry = lastCandle.close;
-      const sl = entry * (1 - SL_PCT / 100);
-      const target = entry * (1 + TARGET_PCT / 100);
+      const sl = lastClose * (1 - SL_PCT / 100);
+      const target = lastClose * (1 + TARGET_PCT / 100);
 
       const message = `
 📈 *BUY SIGNAL*
 Stock: *${symbol}*
-Entry: ₹${entry.toFixed(2)}
+Entry: ₹${lastClose.toFixed(2)}
 
 SL: ₹${sl.toFixed(2)}
 Target: ₹${target.toFixed(2)}
@@ -173,16 +153,13 @@ Confidence: *${confidence}/100*
 `;
 
       await sendTelegram(message);
-
-      await sheet.addRow({
-        Time: new Date().toISOString(),
+      await logToSheet({
         Symbol: symbol,
-        Signal: "BUY",
-        Entry: entry.toFixed(2),
-        SL: sl.toFixed(2),
-        Target: target.toFixed(2),
+        Entry: lastClose,
+        SL: sl,
+        Target: target,
         Confidence: confidence,
-        CandleTime: String(candleTime)
+        Time: new Date().toISOString()
       });
 
       console.log(`✅ Alert sent for ${symbol}`);
