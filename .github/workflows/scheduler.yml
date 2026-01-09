@@ -1,19 +1,10 @@
 name: Trade Alerts Scheduler
 
 on:
-  # Runs every 5 minutes during Indian market hours
-  # UTC 03:00–11:00 ≈ IST 08:30–16:30
   schedule:
-    - cron: "*/5 3-11 * * 1-5"
-
-  # Manual trigger
+    - cron: "*/5 3-11 * * 1-5" # IST 08:30–16:30
   workflow_dispatch:
 
-  # External trigger (optional)
-  repository_dispatch:
-    types: [external_trigger]
-
-# 🔒 Prevent overlapping runs
 concurrency:
   group: trade-alerts-nse
   cancel-in-progress: true
@@ -21,32 +12,24 @@ concurrency:
 jobs:
   run-scanner:
     runs-on: ubuntu-latest
-    timeout-minutes: 10   # ⏱️ safety net
+    timeout-minutes: 10
 
     steps:
-      # 1️⃣ Checkout code
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2️⃣ Setup Node.js
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 18
 
-      # 3️⃣ Install dependencies
       - name: Install dependencies
         run: npm install --no-audit --no-fund
 
-      # 4️⃣ Run trade scanner
       - name: Run Scanner
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-          SHEET_NAME: Alerts
-          ALPHA_VANTAGE_KEY: ${{ secrets.ALPHA_VANTAGE_KEY }}
-        run: |
-          echo "🔐 ALPHA_VANTAGE_KEY length: ${#ALPHA_VANTAGE_KEY}"
-          npm start
+        run: npm start
