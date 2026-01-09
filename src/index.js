@@ -41,7 +41,7 @@ console.log("✅ All environment variables loaded");
    SYMBOLS
 ========================= */
 
-const SYMBOLS = [ /* unchanged list */ 
+const SYMBOLS = [
   "RELIANCE.NS","TCS.NS","HDFCBANK.NS","INFY.NS","HDFC.NS","ICICIBANK.NS","KOTAKBANK.NS","LT.NS",
   "SBIN.NS","AXISBANK.NS","BAJFINANCE.NS","BHARTIARTL.NS","ITC.NS","HINDUNILVR.NS","MARUTI.NS",
   "SUNPHARMA.NS","BAJAJFINSV.NS","ASIANPAINT.NS","NESTLEIND.NS","TITAN.NS","ONGC.NS","POWERGRID.NS",
@@ -58,13 +58,14 @@ const SYMBOLS = [ /* unchanged list */
 ];
 
 const INTERVAL = "5m";
-const RANGE_DAYS = 5;
+const RANGE = "5d";
 
 /* =========================
    HELPERS
 ========================= */
 
 async function sendTelegram(message) {
+  console.log("📤 Sending Telegram alert...");
   await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -141,21 +142,26 @@ function backtestTrade(candles, entryIndex, entryPrice) {
 async function runScanner() {
   for (const symbol of SYMBOLS) {
     try {
-      const period1 = new Date(Date.now() - RANGE_DAYS * 86400000);
-      const candles = await yahooFinance.historical(symbol, { period1, interval: INTERVAL });
+      const result = await yahooFinance.chart(symbol, {
+        interval: INTERVAL,
+        range: RANGE
+      });
 
+      const candles = result?.quotes;
       if (!candles || candles.length < 30) continue;
 
-      const closes = candles.map(c => c.close);
+      const closes = candles.map(c => c.close).filter(Boolean);
+      if (closes.length < 30) continue;
+
       const lastClose = closes.at(-1);
 
       const indicators = calculateIndicators(closes);
-      const confidence = calculateConfidence(indicators);
+      if (!indicators.ema9 || !indicators.ema21 || !indicators.rsi) continue;
 
+      const confidence = calculateConfidence(indicators);
       if (confidence < MIN_CONFIDENCE) continue;
 
       const buySignal = indicators.ema9 > indicators.ema21 && indicators.rsi > 50;
-
       if (!buySignal) continue;
 
       const sl = lastClose * (1 - SL_PCT / 100);
@@ -182,10 +188,17 @@ RR: 1:${(TARGET_PCT / SL_PCT).toFixed(1)}
 `;
 
       await sendTelegram(message);
-      await logToSheet({ Symbol: symbol, Entry: lastClose, SL: sl, Target: target, Confidence: confidence });
+      await logToSheet({
+        Symbol: symbol,
+        Entry: lastClose,
+        SL: sl,
+        Target: target,
+        Confidence: confidence,
+        Time: new Date().toISOString()
+      });
 
     } catch (err) {
-      console.error(symbol, err.message);
+      console.error(`❌ ${symbol}:`, err.message);
     }
   }
 }
