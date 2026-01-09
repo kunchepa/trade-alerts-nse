@@ -1,8 +1,8 @@
 name: Trade Alerts Scheduler
 
 on:
-  # Runs every 5 minutes during Indian market hours (IST ≈ 9:15–15:30)
-  # GitHub cron uses UTC → 03:00–11:00 UTC ≈ 08:30–16:30 IST
+  # Runs every 5 minutes during Indian market hours
+  # UTC 03:00–11:00 ≈ IST 08:30–16:30
   schedule:
     - cron: "*/5 3-11 * * 1-5"
 
@@ -13,9 +13,15 @@ on:
   repository_dispatch:
     types: [external_trigger]
 
+# 🔒 Prevent overlapping runs
+concurrency:
+  group: trade-alerts-nse
+  cancel-in-progress: true
+
 jobs:
   run-scanner:
     runs-on: ubuntu-latest
+    timeout-minutes: 10   # ⏱️ safety net
 
     steps:
       # 1️⃣ Checkout code
@@ -32,7 +38,7 @@ jobs:
       - name: Install dependencies
         run: npm install --no-audit --no-fund
 
-      # 4️⃣ Run trade scanner (ALL SECRETS INJECTED)
+      # 4️⃣ Run trade scanner
       - name: Run Scanner
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
