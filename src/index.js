@@ -1,12 +1,19 @@
 /**
  * trade-alerts-nse
  * FULL WORKING CODE + BACKTEST + SL/TARGET + CONFIDENCE
+ * FIXED FOR yahoo-finance2 v3
  */
 
-import yahooFinance from "yahoo-finance2";
+import YahooFinance from "yahoo-finance2";
 import { EMA, RSI } from "technicalindicators";
 import fetch from "node-fetch";
 import { GoogleSpreadsheet } from "google-spreadsheet";
+
+/* =========================
+   YAHOO FINANCE CLIENT (v3 FIX)
+========================= */
+
+const yahooFinance = new YahooFinance();
 
 /* =========================
    MODE & RISK CONFIG
@@ -65,7 +72,7 @@ const RANGE = "5d";
 ========================= */
 
 async function sendTelegram(message) {
-  console.log("📤 Sending Telegram alert...");
+  console.log("📤 Sending Telegram alert");
   await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
