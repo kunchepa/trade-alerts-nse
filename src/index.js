@@ -1,6 +1,6 @@
 /**
  * trade-alerts-nse
- * FINAL WORKING VERSION (yahoo-finance2 v3 compatible)
+ * FINAL VERSION with DUPLICATE ALERT PROTECTION
  */
 
 import YahooFinance from "yahoo-finance2";
@@ -9,19 +9,22 @@ import fetch from "node-fetch";
 import { GoogleSpreadsheet } from "google-spreadsheet";
 
 /* =========================
-   YAHOO CLIENT (v3)
+   YAHOO FINANCE CLIENT
 ========================= */
 
 const yahooFinance = new YahooFinance();
 
 /* =========================
-   MODE & RISK CONFIG
+   CONFIG
 ========================= */
 
-const MODE = "LIVE"; // "LIVE" or "BACKTEST"
+const MODE = "LIVE";
 const SL_PCT = 0.7;
 const TARGET_PCT = 1.4;
 const MIN_CONFIDENCE = 60;
+
+const INTERVAL = "5m";
+const LOOKBACK_DAYS = 5;
 
 /* =========================
    ENV VALIDATION
@@ -47,17 +50,45 @@ console.log("✅ All environment variables loaded");
 ========================= */
 
 const SYMBOLS = [
-  "RELIANCE.NS","TCS.NS","HDFCBANK.NS","INFY.NS","ICICIBANK.NS","LT.NS",
-  "SBIN.NS","AXISBANK.NS","BAJFINANCE.NS","ITC.NS","MARUTI.NS",
-  "SUNPHARMA.NS","ASIANPAINT.NS","TITAN.NS","ONGC.NS","NTPC.NS",
-  "HCLTECH.NS","ADANIPORTS.NS","JSWSTEEL.NS","TATASTEEL.NS","WIPRO.NS"
+  "RELIANCE.NS","TCS.NS","HDFCBANK.NS","INFY.NS","HDFC.NS","ICICIBANK.NS","KOTAKBANK.NS","LT.NS",
+  "SBIN.NS","AXISBANK.NS","BAJFINANCE.NS","BHARTIARTL.NS","ITC.NS","HINDUNILVR.NS","MARUTI.NS",
+  "SUNPHARMA.NS","BAJAJFINSV.NS","ASIANPAINT.NS","NESTLEIND.NS","TITAN.NS","ONGC.NS","POWERGRID.NS",
+  "ULTRACEMCO.NS","NTPC.NS","DRREDDY.NS","HCLTECH.NS","INDUSINDBK.NS","DIVISLAB.NS","ADANIPORTS.NS",
+  "JSWSTEEL.NS","COALINDIA.NS","ADANIENT.NS","M&M.NS","TATASTEEL.NS","GRASIM.NS","WIPRO.NS",
+  "HDFCLIFE.NS","TECHM.NS","SBILIFE.NS","BRITANNIA.NS","CIPLA.NS","EICHERMOT.NS","HINDALCO.NS",
+  "HEROMOTOCO.NS","BPCL.NS","SHREECEM.NS","IOC.NS","TATACONSUM.NS","UPL.NS","ADANIGREEN.NS",
+  "VEDL.NS","DLF.NS","PIDILITIND.NS","ICICIPRULI.NS","JSWENERGY.NS","BANKBARODA.NS","CANBK.NS",
+  "PNB.NS","UNIONBANK.NS","BANDHANBNK.NS","IDFCFIRSTB.NS","GAIL.NS","TATAPOWER.NS","TORNTPHARM.NS",
+  "ABB.NS","SIEMENS.NS","MUTHOOTFIN.NS","BAJAJ-AUTO.NS","PEL.NS","AMBUJACEM.NS","ACC.NS","BEL.NS",
+  "HAL.NS","IRCTC.NS","PAYTM.NS","POLYCAB.NS","ZOMATO.NS","NAUKRI.NS","BOSCHLTD.NS","ASHOKLEY.NS",
+  "TVSMOTOR.NS","MFSL.NS","CHOLAFIN.NS","INDIGO.NS","DABUR.NS","EMAMILTD.NS","MGL.NS","IGL.NS",
+  "LUPIN.NS","BIOCON.NS","APOLLOHOSP.NS","MAXHEALTH.NS","FORTIS.NS"
 ];
 
-const INTERVAL = "5m";
-const LOOKBACK_DAYS = 5;
+/* =========================
+   GOOGLE SHEET HELPERS
+========================= */
+
+async function getSheet() {
+  const doc = new GoogleSpreadsheet(process.env.SPREADSHEET_ID);
+  await doc.useServiceAccountAuth(JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON));
+  await doc.loadInfo();
+  return doc.sheetsByTitle["Alerts"];
+}
+
+async function hasDuplicateAlert(sheet, symbol, candleTime) {
+  const rows = await sheet.getRows({ limit: 50 });
+
+  return rows.some(
+    r =>
+      r.Symbol === symbol &&
+      r.CandleTime === String(candleTime) &&
+      r.Signal === "BUY"
+  );
+}
 
 /* =========================
-   HELPERS
+   TELEGRAM
 ========================= */
 
 async function sendTelegram(message) {
@@ -72,13 +103,6 @@ async function sendTelegram(message) {
   });
 }
 
-async function logToSheet(row) {
-  const doc = new GoogleSpreadsheet(process.env.SPREADSHEET_ID);
-  await doc.useServiceAccountAuth(JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON));
-  await doc.loadInfo();
-  await doc.sheetsByTitle["Alerts"].addRow(row);
-}
-
 /* =========================
    INDICATORS
 ========================= */
@@ -91,17 +115,11 @@ function calculateIndicators(closes) {
   };
 }
 
-/* =========================
-   CONFIDENCE SCORE
-========================= */
-
 function calculateConfidence({ ema9, ema21, rsi }) {
   let score = 0;
-
   if (ema9 > ema21) score += 40;
   if (rsi > 55 && rsi < 70) score += 30;
   if (ema9 > ema21 && rsi > 50) score += 30;
-
   return Math.min(score, 100);
 }
 
@@ -110,6 +128,8 @@ function calculateConfidence({ ema9, ema21, rsi }) {
 ========================= */
 
 async function runScanner() {
+  const sheet = await getSheet();
+
   const period2 = Math.floor(Date.now() / 1000);
   const period1 = period2 - LOOKBACK_DAYS * 24 * 60 * 60;
 
@@ -124,12 +144,13 @@ async function runScanner() {
       const candles = result?.quotes;
       if (!candles || candles.length < 30) continue;
 
+      const lastCandle = candles.at(-1);
+      const candleTime = lastCandle.date.getTime(); // unique candle id
+
       const closes = candles.map(c => c.close).filter(Boolean);
       if (closes.length < 30) continue;
 
-      const lastClose = closes.at(-1);
       const indicators = calculateIndicators(closes);
-
       if (!indicators.ema9 || !indicators.ema21 || !indicators.rsi) continue;
 
       const confidence = calculateConfidence(indicators);
@@ -138,13 +159,21 @@ async function runScanner() {
       const buySignal = indicators.ema9 > indicators.ema21 && indicators.rsi > 50;
       if (!buySignal) continue;
 
-      const sl = lastClose * (1 - SL_PCT / 100);
-      const target = lastClose * (1 + TARGET_PCT / 100);
+      /* 🔒 DUPLICATE ALERT CHECK */
+      const duplicate = await hasDuplicateAlert(sheet, symbol, candleTime);
+      if (duplicate) {
+        console.log(`⏭️ Skipping duplicate alert for ${symbol}`);
+        continue;
+      }
+
+      const entry = lastCandle.close;
+      const sl = entry * (1 - SL_PCT / 100);
+      const target = entry * (1 + TARGET_PCT / 100);
 
       const message = `
 📈 *BUY SIGNAL*
 Stock: *${symbol}*
-Entry: ₹${lastClose.toFixed(2)}
+Entry: ₹${entry.toFixed(2)}
 
 SL: ₹${sl.toFixed(2)}
 Target: ₹${target.toFixed(2)}
@@ -153,13 +182,16 @@ Confidence: *${confidence}/100*
 `;
 
       await sendTelegram(message);
-      await logToSheet({
+
+      await sheet.addRow({
+        Time: new Date().toISOString(),
         Symbol: symbol,
-        Entry: lastClose,
-        SL: sl,
-        Target: target,
+        Signal: "BUY",
+        Entry: entry.toFixed(2),
+        SL: sl.toFixed(2),
+        Target: target.toFixed(2),
         Confidence: confidence,
-        Time: new Date().toISOString()
+        CandleTime: String(candleTime)
       });
 
       console.log(`✅ Alert sent for ${symbol}`);
