@@ -1,6 +1,7 @@
 /**
  * trade-alerts-nse
- * FINAL WORKING VERSION (yahoo-finance2 v3 compatible)
+ * REVISED VERSION
+ * Strategy: Fresh EMA Crossover + Cooldown
  */
 
 import YahooFinance from "yahoo-finance2";
@@ -9,19 +10,25 @@ import fetch from "node-fetch";
 import { GoogleSpreadsheet } from "google-spreadsheet";
 
 /* =========================
-   YAHOO CLIENT (v3)
+   YAHOO CLIENT
 ========================= */
 
 const yahooFinance = new YahooFinance();
 
 /* =========================
-   MODE & RISK CONFIG
+   CONFIG
 ========================= */
 
-const MODE = "LIVE"; // "LIVE" or "BACKTEST"
 const SL_PCT = 0.7;
 const TARGET_PCT = 1.4;
 const MIN_CONFIDENCE = 60;
+const COOLDOWN_MINUTES = 30;
+
+/* =========================
+   ALERT MEMORY (IN-MEMORY)
+========================= */
+
+const alertedStocks = new Map(); // symbol -> timestamp
 
 /* =========================
    ENV VALIDATION
@@ -89,19 +96,7 @@ async function logToSheet(row) {
 }
 
 /* =========================
-   INDICATORS
-========================= */
-
-function calculateIndicators(closes) {
-  return {
-    ema9: EMA.calculate({ period: 9, values: closes }).at(-1),
-    ema21: EMA.calculate({ period: 21, values: closes }).at(-1),
-    rsi: RSI.calculate({ period: 14, values: closes }).at(-1)
-  };
-}
-
-/* =========================
-   CONFIDENCE SCORE
+   CONFIDENCE
 ========================= */
 
 function calculateConfidence({ ema9, ema21, rsi }) {
@@ -121,9 +116,16 @@ function calculateConfidence({ ema9, ema21, rsi }) {
 async function runScanner() {
   const period2 = Math.floor(Date.now() / 1000);
   const period1 = period2 - LOOKBACK_DAYS * 24 * 60 * 60;
+  const now = Date.now();
 
   for (const symbol of SYMBOLS) {
     try {
+      // 🔒 Cooldown check
+      const lastAlert = alertedStocks.get(symbol);
+      if (lastAlert && now - lastAlert < COOLDOWN_MINUTES * 60 * 1000) {
+        continue;
+      }
+
       const result = await yahooFinance.chart(symbol, {
         interval: INTERVAL,
         period1,
@@ -131,29 +133,40 @@ async function runScanner() {
       });
 
       const candles = result?.quotes;
-      if (!candles || candles.length < 30) continue;
+      if (!candles || candles.length < 40) continue;
 
       const closes = candles.map(c => c.close).filter(Boolean);
-      if (closes.length < 30) continue;
+      if (closes.length < 40) continue;
 
-      const lastClose = closes.at(-1);
-      const indicators = calculateIndicators(closes);
+      // Current EMAs
+      const ema9 = EMA.calculate({ period: 9, values: closes }).at(-1);
+      const ema21 = EMA.calculate({ period: 21, values: closes }).at(-1);
 
-      if (!indicators.ema9 || !indicators.ema21 || !indicators.rsi) continue;
+      // Previous EMAs (for crossover)
+      const prevEma9 = EMA.calculate({ period: 9, values: closes.slice(0, -1) }).at(-1);
+      const prevEma21 = EMA.calculate({ period: 21, values: closes.slice(0, -1) }).at(-1);
 
-      const confidence = calculateConfidence(indicators);
+      const rsi = RSI.calculate({ period: 14, values: closes }).at(-1);
+
+      if (!ema9 || !ema21 || !prevEma9 || !prevEma21 || !rsi) continue;
+
+      // ✅ Fresh crossover only
+      const freshCrossover =
+        prevEma9 <= prevEma21 && ema9 > ema21;
+
+      if (!freshCrossover || rsi <= 50) continue;
+
+      const confidence = calculateConfidence({ ema9, ema21, rsi });
       if (confidence < MIN_CONFIDENCE) continue;
 
-      const buySignal = indicators.ema9 > indicators.ema21 && indicators.rsi > 50;
-      if (!buySignal) continue;
-
-      const sl = lastClose * (1 - SL_PCT / 100);
-      const target = lastClose * (1 + TARGET_PCT / 100);
+      const entry = closes.at(-1);
+      const sl = entry * (1 - SL_PCT / 100);
+      const target = entry * (1 + TARGET_PCT / 100);
 
       const message = `
 📈 *BUY SIGNAL*
 Stock: *${symbol}*
-Entry: ₹${lastClose.toFixed(2)}
+Entry: ₹${entry.toFixed(2)}
 
 SL: ₹${sl.toFixed(2)}
 Target: ₹${target.toFixed(2)}
@@ -164,13 +177,14 @@ Confidence: *${confidence}/100*
       await sendTelegram(message);
       await logToSheet({
         Symbol: symbol,
-        Entry: lastClose,
+        Entry: entry,
         SL: sl,
         Target: target,
         Confidence: confidence,
         Time: new Date().toISOString()
       });
 
+      alertedStocks.set(symbol, now);
       console.log(`✅ Alert sent for ${symbol}`);
 
     } catch (err) {
