@@ -1,7 +1,7 @@
 /**
  * trade-alerts-nse
- * REVISED VERSION
  * Strategy: Fresh EMA Crossover + Cooldown
+ * NOTE: Trading logic is UNCHANGED
  */
 
 import YahooFinance from "yahoo-finance2";
@@ -11,13 +11,13 @@ import { GoogleSpreadsheet } from "google-spreadsheet";
 import { JWT } from "google-auth-library";
 
 /* =========================
-   YAHOO CLIENT
+   YAHOO CLIENT (FIXED FOR v3)
 ========================= */
 
 const yahooFinance = new YahooFinance();
 
 /* =========================
-   CONFIG
+   CONFIG (UNCHANGED)
 ========================= */
 
 const SL_PCT = 0.7;
@@ -26,10 +26,10 @@ const MIN_CONFIDENCE = 60;
 const COOLDOWN_MINUTES = 30;
 
 /* =========================
-   ALERT MEMORY (IN-MEMORY)
+   ALERT MEMORY
 ========================= */
 
-const alertedStocks = new Map(); // symbol -> timestamp
+const alertedStocks = new Map();
 
 /* =========================
    ENV VALIDATION
@@ -74,7 +74,7 @@ const INTERVAL = "5m";
 const LOOKBACK_DAYS = 5;
 
 /* =========================
-   HELPERS
+   TELEGRAM
 ========================= */
 
 async function sendTelegram(message) {
@@ -90,10 +90,10 @@ async function sendTelegram(message) {
 }
 
 /* =========================
-   GOOGLE SHEETS (FIXED ONLY)
+   GOOGLE SHEETS (FIXED)
 ========================= */
 
-async function logToSheet(row) {
+async function logToSheet(rowArray) {
   try {
     const creds = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
 
@@ -107,9 +107,9 @@ async function logToSheet(row) {
     await doc.loadInfo();
 
     const sheet = doc.sheetsByTitle["Alerts"];
-    await sheet.addRow(row);
+    await sheet.addRow(rowArray);
 
-    console.log("✅ Logged to Google Sheets");
+    console.log("✅ Logged FULL row to Google Sheets");
   } catch (err) {
     console.error("❌ Google Sheets error:", err.message);
   }
@@ -186,14 +186,20 @@ Confidence: *${confidence}/100*
 
       await sendTelegram(message);
 
-      await logToSheet({
-        Symbol: symbol,
-        Entry: entry,
-        SL: sl,
-        Target: target,
-        Confidence: confidence,
-        Time: new Date().toISOString()
-      });
+      const nowUTC = new Date();
+      const timeIST = new Date(nowUTC.getTime() + 5.5 * 60 * 60 * 1000);
+
+      await logToSheet([
+        timeIST.toLocaleString("en-IN"), // TimeIST
+        symbol,                          // Symbol
+        "BUY",                           // Direction
+        entry.toFixed(2),                // EntryPrice
+        target.toFixed(2),               // Target
+        sl.toFixed(2),                   // StopLoss
+        "PENDING",                       // Plus2Check
+        confidence,                      // Confidence
+        nowUTC.toISOString()             // RawTimeUTC
+      ]);
 
       alertedStocks.set(symbol, now);
       console.log(`✅ Alert sent for ${symbol}`);
