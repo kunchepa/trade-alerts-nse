@@ -8,9 +8,36 @@ import { GoogleSpreadsheet } from "google-spreadsheet";
 import { JWT } from "google-auth-library";
 
 // ================================
-// ENV CHECK (safe log)
+// ENV CHECK
 // ================================
 console.log("✅ All environment variables loaded");
+
+// ================================
+// TOP 100 NSE STOCKS (LIQUID)
+// ================================
+const NSE_TOP_100 = [
+  "RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", "ICICIBANK.NS",
+  "SBIN.NS", "KOTAKBANK.NS", "AXISBANK.NS", "LT.NS", "ITC.NS",
+  "HINDUNILVR.NS", "BAJFINANCE.NS", "BHARTIARTL.NS", "ASIANPAINT.NS",
+  "MARUTI.NS", "SUNPHARMA.NS", "TITAN.NS", "ULTRACEMCO.NS",
+  "WIPRO.NS", "ADANIENT.NS", "ADANIPORTS.NS", "ONGC.NS",
+  "NTPC.NS", "POWERGRID.NS", "COALINDIA.NS", "JSWSTEEL.NS",
+  "TATASTEEL.NS", "HCLTECH.NS", "TECHM.NS", "INDUSINDBK.NS",
+  "BAJAJFINSV.NS", "GRASIM.NS", "SBILIFE.NS", "HDFCLIFE.NS",
+  "DRREDDY.NS", "CIPLA.NS", "DIVISLAB.NS", "APOLLOHOSP.NS",
+  "BRITANNIA.NS", "HEROMOTOCO.NS", "EICHERMOT.NS",
+  "BAJAJ-AUTO.NS", "TATAMOTORS.NS", "M&M.NS",
+  "UPL.NS", "PIDILITIND.NS", "SHREECEM.NS",
+  "HINDALCO.NS", "TATACONSUM.NS", "DABUR.NS",
+  "GODREJCP.NS", "ICICIPRULI.NS", "HAVELLS.NS",
+  "LTIM.NS", "SIEMENS.NS", "ABB.NS",
+  "DLF.NS", "ADANIGREEN.NS", "ADANIPOWER.NS",
+  "AMBUJACEM.NS", "ACC.NS", "BANKBARODA.NS",
+  "PNB.NS", "CANBK.NS", "INDIGO.NS",
+  "NAUKRI.NS", "TRENT.NS", "ZOMATO.NS",
+  "PAYTM.NS", "IRCTC.NS", "HAL.NS",
+  "BEL.NS", "LTTS.NS", "MPHASIS.NS"
+];
 
 // ================================
 // Telegram Helper
@@ -29,7 +56,7 @@ async function sendTelegramMessage(message) {
 }
 
 // ================================
-// Google Sheets Logger (FIXED)
+// Google Sheets Logger (FIXED v4)
 // ================================
 async function logToSheet(row) {
   try {
@@ -45,12 +72,10 @@ async function logToSheet(row) {
     await doc.loadInfo();
 
     const sheet = doc.sheetsByTitle["Alerts"];
-    if (!sheet) {
-      throw new Error("Sheet 'Alerts' not found");
-    }
+    if (!sheet) throw new Error("Sheet 'Alerts' not found");
 
     await sheet.addRow(row);
-    console.log("✅ Row added to Google Sheet");
+    console.log("✅ Sheet row added:", row.Symbol);
 
   } catch (err) {
     console.error("❌ Google Sheet error:", err.message);
@@ -58,7 +83,7 @@ async function logToSheet(row) {
 }
 
 // ================================
-// Market Scanner Logic (UNCHANGED)
+// SCAN LOGIC (UNCHANGED)
 // ================================
 async function scanStock(symbol) {
   try {
@@ -67,10 +92,7 @@ async function scanStock(symbol) {
       interval: "5m",
     });
 
-    if (!result || !result.indicators?.quote?.[0]?.close) {
-      console.log(`❌ ${symbol}: No data found, symbol may be delisted`);
-      return;
-    }
+    if (!result?.indicators?.quote?.[0]?.close) return;
 
     const closes = result.indicators.quote[0].close.filter(Boolean);
     if (closes.length < 60) return;
@@ -78,13 +100,12 @@ async function scanStock(symbol) {
     const ema20 = EMA.calculate({ period: 20, values: closes });
     const ema50 = EMA.calculate({ period: 50, values: closes });
 
-    const lastClose = closes[closes.length - 1];
     const prevEma20 = ema20[ema20.length - 2];
     const lastEma20 = ema20[ema20.length - 1];
     const lastEma50 = ema50[ema50.length - 1];
+    const entry = closes[closes.length - 1];
 
     if (prevEma20 < lastEma50 && lastEma20 > lastEma50) {
-      const entry = lastClose;
       const target = +(entry * 1.015).toFixed(2);
       const stopLoss = +(entry * 0.995).toFixed(2);
 
@@ -114,7 +135,6 @@ async function scanStock(symbol) {
         RawTimeUTC: new Date().toISOString(),
       });
     }
-
   } catch (err) {
     console.log(`❌ ${symbol}: ${err.message}`);
   }
@@ -124,16 +144,7 @@ async function scanStock(symbol) {
 // MAIN RUNNER
 // ================================
 async function runScanner() {
-  const symbols = [
-    "INFY.NS",
-    "HDFC.NS",
-    "KOTAKBANK.NS",
-    "DIVISLAB.NS",
-    "PEL.NS",
-    "ZOMATO.NS",
-  ];
-
-  for (const symbol of symbols) {
+  for (const symbol of NSE_TOP_100) {
     await scanStock(symbol);
   }
 }
