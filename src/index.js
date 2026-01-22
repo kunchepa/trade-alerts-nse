@@ -1,7 +1,7 @@
 /**
  * trade-alerts-nse
  * Strategy: Fresh EMA Crossover + Cooldown
- * NOTE: Trading logic is UNCHANGED
+ * NOTE: CORE STRATEGY IS UNCHANGED
  */
 
 import YahooFinance from "yahoo-finance2";
@@ -9,10 +9,6 @@ import { EMA, RSI } from "technicalindicators";
 import fetch from "node-fetch";
 import { GoogleSpreadsheet } from "google-spreadsheet";
 import { JWT } from "google-auth-library";
-
-/* =========================
-   YAHOO CLIENT (FIXED FOR v3)
-========================= */
 
 const yahooFinance = new YahooFinance();
 
@@ -25,6 +21,36 @@ const TARGET_PCT = 1.4;
 const MIN_CONFIDENCE = 60;
 const COOLDOWN_MINUTES = 30;
 
+const INTERVAL = "5m";
+const LOOKBACK_DAYS = 5;
+
+/* =========================
+   STRICT NIFTY 100 SYMBOLS
+========================= */
+
+const SYMBOLS = [
+"ADANIENT.NS","ADANIPORTS.NS","APOLLOHOSP.NS","ASIANPAINT.NS","AXISBANK.NS",
+"BAJAJ-AUTO.NS","BAJFINANCE.NS","BAJAJFINSV.NS","BPCL.NS","BHARTIARTL.NS",
+"BRITANNIA.NS","CIPLA.NS","COALINDIA.NS","DIVISLAB.NS","DRREDDY.NS",
+"EICHERMOT.NS","GRASIM.NS","HCLTECH.NS","HDFCBANK.NS","HDFCLIFE.NS",
+"HEROMOTOCO.NS","HINDALCO.NS","HINDUNILVR.NS","ICICIBANK.NS","ITC.NS",
+"IOC.NS","INDUSINDBK.NS","INFY.NS","JSWSTEEL.NS","KOTAKBANK.NS",
+"LT.NS","M&M.NS","MARUTI.NS","NESTLEIND.NS","NTPC.NS",
+"ONGC.NS","POWERGRID.NS","RELIANCE.NS","SBIN.NS","SBILIFE.NS",
+"SHREECEM.NS","SUNPHARMA.NS","TATACONSUM.NS","TATAMOTORS.NS","TATASTEEL.NS",
+"TCS.NS","TECHM.NS","TITAN.NS","ULTRACEMCO.NS","UPL.NS",
+"WIPRO.NS",
+
+// Next 50
+"ABB.NS","ACC.NS","AMBUJACEM.NS","ASHOKLEY.NS","BANDHANBNK.NS","BEL.NS",
+"BHEL.NS","BIOCON.NS","CANBK.NS","CHOLAFIN.NS","DLF.NS","GAIL.NS",
+"HAL.NS","HAVELLS.NS","ICICIPRULI.NS","IDFCFIRSTB.NS","IGL.NS",
+"IRCTC.NS","JINDALSTEL.NS","JSWENERGY.NS","LICHSGFIN.NS","MGL.NS",
+"MUTHOOTFIN.NS","NAUKRI.NS","PEL.NS","PIDILITIND.NS","PNB.NS",
+"POLYCAB.NS","SAIL.NS","SIEMENS.NS","TORNTPHARM.NS","TVSMOTOR.NS",
+"UNIONBANK.NS","VEDL.NS","ZOMATO.NS"
+];
+
 /* =========================
    ALERT MEMORY
 ========================= */
@@ -32,105 +58,19 @@ const COOLDOWN_MINUTES = 30;
 const alertedStocks = new Map();
 
 /* =========================
-   ENV VALIDATION
-========================= */
-
-const REQUIRED_ENV = [
-  "TELEGRAM_BOT_TOKEN",
-  "TELEGRAM_CHAT_ID",
-  "SPREADSHEET_ID",
-  "GOOGLE_SERVICE_ACCOUNT_JSON"
-];
-
-for (const key of REQUIRED_ENV) {
-  if (!process.env[key]) {
-    throw new Error(`❌ Missing env variable: ${key}`);
-  }
-}
-
-console.log("✅ All environment variables loaded");
-
-/* =========================
-   SYMBOLS (UNCHANGED)
-========================= */
-
-const SYMBOLS = [
-  "RELIANCE.NS","TCS.NS","HDFCBANK.NS","INFY.NS","HDFC.NS","ICICIBANK.NS","KOTAKBANK.NS","LT.NS",
-  "SBIN.NS","AXISBANK.NS","BAJFINANCE.NS","BHARTIARTL.NS","ITC.NS","HINDUNILVR.NS","MARUTI.NS",
-  "SUNPHARMA.NS","BAJAJFINSV.NS","ASIANPAINT.NS","NESTLEIND.NS","TITAN.NS","ONGC.NS","POWERGRID.NS",
-  "ULTRACEMCO.NS","NTPC.NS","DRREDDY.NS","HCLTECH.NS","INDUSINDBK.NS","DIVISLAB.NS","ADANIPORTS.NS",
-  "JSWSTEEL.NS","COALINDIA.NS","ADANIENT.NS","M&M.NS","TATASTEEL.NS","GRASIM.NS","WIPRO.NS",
-  "HDFCLIFE.NS","TECHM.NS","SBILIFE.NS","BRITANNIA.NS","CIPLA.NS","EICHERMOT.NS","HINDALCO.NS",
-  "HEROMOTOCO.NS","BPCL.NS","SHREECEM.NS","IOC.NS","TATACONSUM.NS","UPL.NS","ADANIGREEN.NS",
-  "VEDL.NS","DLF.NS","PIDILITIND.NS","ICICIPRULI.NS","JSWENERGY.NS","BANKBARODA.NS","CANBK.NS",
-  "PNB.NS","UNIONBANK.NS","BANDHANBNK.NS","IDFCFIRSTB.NS","GAIL.NS","TATAPOWER.NS","TORNTPHARM.NS",
-  "ABB.NS","SIEMENS.NS","MUTHOOTFIN.NS","BAJAJ-AUTO.NS","PEL.NS","AMBUJACEM.NS","ACC.NS","BEL.NS",
-  "HAL.NS","IRCTC.NS","PAYTM.NS","POLYCAB.NS","ZOMATO.NS","NAUKRI.NS","BOSCHLTD.NS","ASHOKLEY.NS",
-  "TVSMOTOR.NS","MFSL.NS","CHOLAFIN.NS","INDIGO.NS","DABUR.NS","EMAMILTD.NS","MGL.NS","IGL.NS",
-  "LUPIN.NS","BIOCON.NS","APOLLOHOSP.NS","MAXHEALTH.NS","FORTIS.NS"
-];
-
-const INTERVAL = "5m";
-const LOOKBACK_DAYS = 5;
-
-/* =========================
-   TELEGRAM
-========================= */
-
-async function sendTelegram(message) {
-  await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      chat_id: process.env.TELEGRAM_CHAT_ID,
-      text: message,
-      parse_mode: "Markdown"
-    })
-  });
-}
-
-/* =========================
-   GOOGLE SHEETS (FIXED)
-========================= */
-
-async function logToSheet(rowArray) {
-  try {
-    const creds = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
-
-    const auth = new JWT({
-      email: creds.client_email,
-      key: creds.private_key,
-      scopes: ["https://www.googleapis.com/auth/spreadsheets"]
-    });
-
-    const doc = new GoogleSpreadsheet(process.env.SPREADSHEET_ID, auth);
-    await doc.loadInfo();
-
-    const sheet = doc.sheetsByTitle["Alerts"];
-    await sheet.addRow(rowArray);
-
-    console.log("✅ Logged FULL row to Google Sheets");
-  } catch (err) {
-    console.error("❌ Google Sheets error:", err.message);
-  }
-}
-
-/* =========================
    CONFIDENCE (UNCHANGED)
 ========================= */
 
 function calculateConfidence({ ema9, ema21, rsi }) {
   let score = 0;
-
   if (ema9 > ema21) score += 40;
   if (rsi > 55 && rsi < 70) score += 30;
   if (ema9 > ema21 && rsi > 50) score += 30;
-
   return Math.min(score, 100);
 }
 
 /* =========================
-   MAIN SCANNER (UNCHANGED)
+   MAIN SCANNER
 ========================= */
 
 async function runScanner() {
@@ -150,68 +90,91 @@ async function runScanner() {
       });
 
       const candles = result?.quotes;
-      if (!candles || candles.length < 40) continue;
+      if (!candles || candles.length < 50) continue;
 
       const closes = candles.map(c => c.close).filter(Boolean);
-      if (closes.length < 40) continue;
 
       const ema9 = EMA.calculate({ period: 9, values: closes }).at(-1);
       const ema21 = EMA.calculate({ period: 21, values: closes }).at(-1);
+      const ema50 = EMA.calculate({ period: 50, values: closes }).at(-1);
+
       const prevEma9 = EMA.calculate({ period: 9, values: closes.slice(0, -1) }).at(-1);
       const prevEma21 = EMA.calculate({ period: 21, values: closes.slice(0, -1) }).at(-1);
+
       const rsi = RSI.calculate({ period: 14, values: closes }).at(-1);
 
-      if (!ema9 || !ema21 || !prevEma9 || !prevEma21 || !rsi) continue;
+      if (!ema9 || !ema21 || !ema50 || !prevEma9 || !prevEma21 || !rsi) continue;
+
+      /* ========= CORE LOGIC (UNCHANGED) ========= */
 
       const freshCrossover = prevEma9 <= prevEma21 && ema9 > ema21;
       if (!freshCrossover || rsi <= 50) continue;
 
+      /* ========= SAFETY FILTERS ========= */
+
+      const entry = closes.at(-1);
+      const lastCandle = candles.at(-1);
+
+      // 1️⃣ Candle strength ≥ 0.25%
+      const candleStrength =
+        ((lastCandle.close - lastCandle.open) / lastCandle.open) * 100;
+      if (candleStrength < 0.25) continue;
+
+      // 2️⃣ EMA50 trend filter
+      if (entry < ema50) continue;
+
+      // 3️⃣ RSI ceiling
+      if (rsi > 68) continue;
+
+      // 4️⃣ Time filter (IST)
+      const nowUTC = new Date();
+      const timeIST = new Date(nowUTC.getTime() + 5.5 * 60 * 60 * 1000);
+      const hour = timeIST.getHours();
+      if (hour < 9 || hour === 12 || hour === 13) continue;
+
+      // 5️⃣ ATR volatility skip
+      const recentHigh = Math.max(...closes.slice(-14));
+      const recentLow = Math.min(...closes.slice(-14));
+      const atrPct = ((recentHigh - recentLow) / entry) * 100;
+      if (atrPct > 3) continue;
+
+      /* ========= CONFIDENCE (UNCHANGED) ========= */
+
       const confidence = calculateConfidence({ ema9, ema21, rsi });
       if (confidence < MIN_CONFIDENCE) continue;
 
-      const entry = closes.at(-1);
+      /* ========= SL / TARGET (UNCHANGED) ========= */
+
       const sl = entry * (1 - SL_PCT / 100);
       const target = entry * (1 + TARGET_PCT / 100);
 
-      const message = `
+      await sendTelegram(`
 📈 *BUY SIGNAL*
 Stock: *${symbol}*
 Entry: ₹${entry.toFixed(2)}
-
 SL: ₹${sl.toFixed(2)}
 Target: ₹${target.toFixed(2)}
-
 Confidence: *${confidence}/100*
-`;
-
-      await sendTelegram(message);
-
-      const nowUTC = new Date();
-      const timeIST = new Date(nowUTC.getTime() + 5.5 * 60 * 60 * 1000);
+`);
 
       await logToSheet([
-        timeIST.toLocaleString("en-IN"), // TimeIST
-        symbol,                          // Symbol
-        "BUY",                           // Direction
-        entry.toFixed(2),                // EntryPrice
-        target.toFixed(2),               // Target
-        sl.toFixed(2),                   // StopLoss
-        "PENDING",                       // Plus2Check
-        confidence,                      // Confidence
-        nowUTC.toISOString()             // RawTimeUTC
+        timeIST.toLocaleString("en-IN"),
+        symbol,
+        "BUY",
+        entry.toFixed(2),
+        target.toFixed(2),
+        sl.toFixed(2),
+        "PENDING",
+        confidence,
+        nowUTC.toISOString()
       ]);
 
       alertedStocks.set(symbol, now);
-      console.log(`✅ Alert sent for ${symbol}`);
 
     } catch (err) {
       console.error(`❌ ${symbol}:`, err.message);
     }
   }
 }
-
-/* =========================
-   START
-========================= */
 
 await runScanner();
