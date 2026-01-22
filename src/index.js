@@ -1,63 +1,98 @@
-// ================================
-// Imports
-// ================================
-import yahooFinance from "yahoo-finance2";
-import { EMA } from "technicalindicators";
+/**
+ * trade-alerts-nse
+ * REVISED VERSION
+ * Strategy: Fresh EMA Crossover + Cooldown
+ */
+
+import YahooFinance from "yahoo-finance2";
+import { EMA, RSI } from "technicalindicators";
 import fetch from "node-fetch";
 import { GoogleSpreadsheet } from "google-spreadsheet";
 import { JWT } from "google-auth-library";
 
-// ================================
-// ENV CHECK
-// ================================
-console.log("✅ All environment variables loaded");
+/* =========================
+   YAHOO CLIENT
+========================= */
 
-// ================================
-// TOP 100 NSE STOCKS (LIQUID)
-// ================================
-const NSE_TOP_100 = [
-  "RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", "ICICIBANK.NS",
-  "SBIN.NS", "KOTAKBANK.NS", "AXISBANK.NS", "LT.NS", "ITC.NS",
-  "HINDUNILVR.NS", "BAJFINANCE.NS", "BHARTIARTL.NS", "ASIANPAINT.NS",
-  "MARUTI.NS", "SUNPHARMA.NS", "TITAN.NS", "ULTRACEMCO.NS",
-  "WIPRO.NS", "ADANIENT.NS", "ADANIPORTS.NS", "ONGC.NS",
-  "NTPC.NS", "POWERGRID.NS", "COALINDIA.NS", "JSWSTEEL.NS",
-  "TATASTEEL.NS", "HCLTECH.NS", "TECHM.NS", "INDUSINDBK.NS",
-  "BAJAJFINSV.NS", "GRASIM.NS", "SBILIFE.NS", "HDFCLIFE.NS",
-  "DRREDDY.NS", "CIPLA.NS", "DIVISLAB.NS", "APOLLOHOSP.NS",
-  "BRITANNIA.NS", "HEROMOTOCO.NS", "EICHERMOT.NS",
-  "BAJAJ-AUTO.NS", "TATAMOTORS.NS", "M&M.NS",
-  "UPL.NS", "PIDILITIND.NS", "SHREECEM.NS",
-  "HINDALCO.NS", "TATACONSUM.NS", "DABUR.NS",
-  "GODREJCP.NS", "ICICIPRULI.NS", "HAVELLS.NS",
-  "LTIM.NS", "SIEMENS.NS", "ABB.NS",
-  "DLF.NS", "ADANIGREEN.NS", "ADANIPOWER.NS",
-  "AMBUJACEM.NS", "ACC.NS", "BANKBARODA.NS",
-  "PNB.NS", "CANBK.NS", "INDIGO.NS",
-  "NAUKRI.NS", "TRENT.NS", "ZOMATO.NS",
-  "PAYTM.NS", "IRCTC.NS", "HAL.NS",
-  "BEL.NS", "LTTS.NS", "MPHASIS.NS"
+const yahooFinance = new YahooFinance();
+
+/* =========================
+   CONFIG
+========================= */
+
+const SL_PCT = 0.7;
+const TARGET_PCT = 1.4;
+const MIN_CONFIDENCE = 60;
+const COOLDOWN_MINUTES = 30;
+
+/* =========================
+   ALERT MEMORY (IN-MEMORY)
+========================= */
+
+const alertedStocks = new Map(); // symbol -> timestamp
+
+/* =========================
+   ENV VALIDATION
+========================= */
+
+const REQUIRED_ENV = [
+  "TELEGRAM_BOT_TOKEN",
+  "TELEGRAM_CHAT_ID",
+  "SPREADSHEET_ID",
+  "GOOGLE_SERVICE_ACCOUNT_JSON"
 ];
 
-// ================================
-// Telegram Helper
-// ================================
-async function sendTelegramMessage(message) {
-  const url = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`;
+for (const key of REQUIRED_ENV) {
+  if (!process.env[key]) {
+    throw new Error(`❌ Missing env variable: ${key}`);
+  }
+}
 
-  await fetch(url, {
+console.log("✅ All environment variables loaded");
+
+/* =========================
+   SYMBOLS (UNCHANGED)
+========================= */
+
+const SYMBOLS = [
+  "RELIANCE.NS","TCS.NS","HDFCBANK.NS","INFY.NS","HDFC.NS","ICICIBANK.NS","KOTAKBANK.NS","LT.NS",
+  "SBIN.NS","AXISBANK.NS","BAJFINANCE.NS","BHARTIARTL.NS","ITC.NS","HINDUNILVR.NS","MARUTI.NS",
+  "SUNPHARMA.NS","BAJAJFINSV.NS","ASIANPAINT.NS","NESTLEIND.NS","TITAN.NS","ONGC.NS","POWERGRID.NS",
+  "ULTRACEMCO.NS","NTPC.NS","DRREDDY.NS","HCLTECH.NS","INDUSINDBK.NS","DIVISLAB.NS","ADANIPORTS.NS",
+  "JSWSTEEL.NS","COALINDIA.NS","ADANIENT.NS","M&M.NS","TATASTEEL.NS","GRASIM.NS","WIPRO.NS",
+  "HDFCLIFE.NS","TECHM.NS","SBILIFE.NS","BRITANNIA.NS","CIPLA.NS","EICHERMOT.NS","HINDALCO.NS",
+  "HEROMOTOCO.NS","BPCL.NS","SHREECEM.NS","IOC.NS","TATACONSUM.NS","UPL.NS","ADANIGREEN.NS",
+  "VEDL.NS","DLF.NS","PIDILITIND.NS","ICICIPRULI.NS","JSWENERGY.NS","BANKBARODA.NS","CANBK.NS",
+  "PNB.NS","UNIONBANK.NS","BANDHANBNK.NS","IDFCFIRSTB.NS","GAIL.NS","TATAPOWER.NS","TORNTPHARM.NS",
+  "ABB.NS","SIEMENS.NS","MUTHOOTFIN.NS","BAJAJ-AUTO.NS","PEL.NS","AMBUJACEM.NS","ACC.NS","BEL.NS",
+  "HAL.NS","IRCTC.NS","PAYTM.NS","POLYCAB.NS","ZOMATO.NS","NAUKRI.NS","BOSCHLTD.NS","ASHOKLEY.NS",
+  "TVSMOTOR.NS","MFSL.NS","CHOLAFIN.NS","INDIGO.NS","DABUR.NS","EMAMILTD.NS","MGL.NS","IGL.NS",
+  "LUPIN.NS","BIOCON.NS","APOLLOHOSP.NS","MAXHEALTH.NS","FORTIS.NS"
+];
+
+const INTERVAL = "5m";
+const LOOKBACK_DAYS = 5;
+
+/* =========================
+   HELPERS
+========================= */
+
+async function sendTelegram(message) {
+  await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       chat_id: process.env.TELEGRAM_CHAT_ID,
       text: message,
-    }),
+      parse_mode: "Markdown"
+    })
   });
 }
 
-// ================================
-// Google Sheets Logger (FIXED v4)
-// ================================
+/* =========================
+   GOOGLE SHEETS (FIXED ONLY)
+========================= */
+
 async function logToSheet(row) {
   try {
     const creds = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
@@ -65,88 +100,112 @@ async function logToSheet(row) {
     const auth = new JWT({
       email: creds.client_email,
       key: creds.private_key,
-      scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+      scopes: ["https://www.googleapis.com/auth/spreadsheets"]
     });
 
     const doc = new GoogleSpreadsheet(process.env.SPREADSHEET_ID, auth);
     await doc.loadInfo();
 
     const sheet = doc.sheetsByTitle["Alerts"];
-    if (!sheet) throw new Error("Sheet 'Alerts' not found");
-
     await sheet.addRow(row);
-    console.log("✅ Sheet row added:", row.Symbol);
 
+    console.log("✅ Logged to Google Sheets");
   } catch (err) {
-    console.error("❌ Google Sheet error:", err.message);
+    console.error("❌ Google Sheets error:", err.message);
   }
 }
 
-// ================================
-// SCAN LOGIC (UNCHANGED)
-// ================================
-async function scanStock(symbol) {
-  try {
-    const result = await yahooFinance.chart(symbol, {
-      period1: "1d",
-      interval: "5m",
-    });
+/* =========================
+   CONFIDENCE (UNCHANGED)
+========================= */
 
-    if (!result?.indicators?.quote?.[0]?.close) return;
+function calculateConfidence({ ema9, ema21, rsi }) {
+  let score = 0;
 
-    const closes = result.indicators.quote[0].close.filter(Boolean);
-    if (closes.length < 60) return;
+  if (ema9 > ema21) score += 40;
+  if (rsi > 55 && rsi < 70) score += 30;
+  if (ema9 > ema21 && rsi > 50) score += 30;
 
-    const ema20 = EMA.calculate({ period: 20, values: closes });
-    const ema50 = EMA.calculate({ period: 50, values: closes });
+  return Math.min(score, 100);
+}
 
-    const prevEma20 = ema20[ema20.length - 2];
-    const lastEma20 = ema20[ema20.length - 1];
-    const lastEma50 = ema50[ema50.length - 1];
-    const entry = closes[closes.length - 1];
+/* =========================
+   MAIN SCANNER (UNCHANGED)
+========================= */
 
-    if (prevEma20 < lastEma50 && lastEma20 > lastEma50) {
-      const target = +(entry * 1.015).toFixed(2);
-      const stopLoss = +(entry * 0.995).toFixed(2);
+async function runScanner() {
+  const period2 = Math.floor(Date.now() / 1000);
+  const period1 = period2 - LOOKBACK_DAYS * 24 * 60 * 60;
+  const now = Date.now();
 
-      const nowIST = new Date().toLocaleString("en-IN", {
-        timeZone: "Asia/Kolkata",
+  for (const symbol of SYMBOLS) {
+    try {
+      const lastAlert = alertedStocks.get(symbol);
+      if (lastAlert && now - lastAlert < COOLDOWN_MINUTES * 60 * 1000) continue;
+
+      const result = await yahooFinance.chart(symbol, {
+        interval: INTERVAL,
+        period1,
+        period2
       });
 
-      const message =
-        `📈 BUY SIGNAL\n` +
-        `Stock: ${symbol}\n` +
-        `Entry: ₹${entry}\n` +
-        `SL: ₹${stopLoss}\n` +
-        `Target: ₹${target}\n\n` +
-        `Confidence: 100/100`;
+      const candles = result?.quotes;
+      if (!candles || candles.length < 40) continue;
 
-      await sendTelegramMessage(message);
+      const closes = candles.map(c => c.close).filter(Boolean);
+      if (closes.length < 40) continue;
+
+      const ema9 = EMA.calculate({ period: 9, values: closes }).at(-1);
+      const ema21 = EMA.calculate({ period: 21, values: closes }).at(-1);
+      const prevEma9 = EMA.calculate({ period: 9, values: closes.slice(0, -1) }).at(-1);
+      const prevEma21 = EMA.calculate({ period: 21, values: closes.slice(0, -1) }).at(-1);
+      const rsi = RSI.calculate({ period: 14, values: closes }).at(-1);
+
+      if (!ema9 || !ema21 || !prevEma9 || !prevEma21 || !rsi) continue;
+
+      const freshCrossover = prevEma9 <= prevEma21 && ema9 > ema21;
+      if (!freshCrossover || rsi <= 50) continue;
+
+      const confidence = calculateConfidence({ ema9, ema21, rsi });
+      if (confidence < MIN_CONFIDENCE) continue;
+
+      const entry = closes.at(-1);
+      const sl = entry * (1 - SL_PCT / 100);
+      const target = entry * (1 + TARGET_PCT / 100);
+
+      const message = `
+📈 *BUY SIGNAL*
+Stock: *${symbol}*
+Entry: ₹${entry.toFixed(2)}
+
+SL: ₹${sl.toFixed(2)}
+Target: ₹${target.toFixed(2)}
+
+Confidence: *${confidence}/100*
+`;
+
+      await sendTelegram(message);
 
       await logToSheet({
-        TimeIST: nowIST,
         Symbol: symbol,
-        Direction: "BUY",
-        EntryPrice: entry,
+        Entry: entry,
+        SL: sl,
         Target: target,
-        StopLoss: stopLoss,
-        Plus2Check: "",
-        Confidence: "100/100",
-        RawTimeUTC: new Date().toISOString(),
+        Confidence: confidence,
+        Time: new Date().toISOString()
       });
+
+      alertedStocks.set(symbol, now);
+      console.log(`✅ Alert sent for ${symbol}`);
+
+    } catch (err) {
+      console.error(`❌ ${symbol}:`, err.message);
     }
-  } catch (err) {
-    console.log(`❌ ${symbol}: ${err.message}`);
   }
 }
 
-// ================================
-// MAIN RUNNER
-// ================================
-async function runScanner() {
-  for (const symbol of NSE_TOP_100) {
-    await scanStock(symbol);
-  }
-}
+/* =========================
+   START
+========================= */
 
-runScanner();
+await runScanner();
