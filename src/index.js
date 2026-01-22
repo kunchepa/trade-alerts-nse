@@ -1,6 +1,5 @@
 /**
  * trade-alerts-nse
- * REVISED VERSION
  * Strategy: Fresh EMA Crossover + Cooldown
  */
 
@@ -96,6 +95,17 @@ async function logToSheet(row) {
 }
 
 /* =========================
+   TIME (IST)
+========================= */
+
+function getISTTime() {
+  return new Date().toLocaleString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    hour12: false
+  });
+}
+
+/* =========================
    CONFIDENCE
 ========================= */
 
@@ -142,7 +152,7 @@ async function runScanner() {
       const ema9 = EMA.calculate({ period: 9, values: closes }).at(-1);
       const ema21 = EMA.calculate({ period: 21, values: closes }).at(-1);
 
-      // Previous EMAs (for crossover)
+      // Previous EMAs
       const prevEma9 = EMA.calculate({ period: 9, values: closes.slice(0, -1) }).at(-1);
       const prevEma21 = EMA.calculate({ period: 21, values: closes.slice(0, -1) }).at(-1);
 
@@ -150,11 +160,8 @@ async function runScanner() {
 
       if (!ema9 || !ema21 || !prevEma9 || !prevEma21 || !rsi) continue;
 
-      // ✅ Fresh crossover only
-      const freshCrossover =
-        prevEma9 <= prevEma21 && ema9 > ema21;
-
-      if (!freshCrossover || rsi <= 50) continue;
+      // ✅ Fresh crossover
+      if (!(prevEma9 <= prevEma21 && ema9 > ema21 && rsi > 50)) continue;
 
       const confidence = calculateConfidence({ ema9, ema21, rsi });
       if (confidence < MIN_CONFIDENCE) continue;
@@ -175,13 +182,17 @@ Confidence: *${confidence}/100*
 `;
 
       await sendTelegram(message);
+
       await logToSheet({
+        TimeIST: getISTTime(),
         Symbol: symbol,
-        Entry: entry,
-        SL: sl,
-        Target: target,
+        Direction: "BUY",
+        EntryPrice: entry.toFixed(2),
+        Target: target.toFixed(2),
+        StopLoss: sl.toFixed(2),
+        Plus2Check: "Pending",
         Confidence: confidence,
-        Time: new Date().toISOString()
+        RawTimeUTC: new Date().toISOString()
       });
 
       alertedStocks.set(symbol, now);
