@@ -5,6 +5,9 @@
   "scripts": {
     "start": "node src/index.js"
   },
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "dependencies": {
     "yahoo-finance2": "^3.11.2",
     "technicalindicators": "^3.1.0",
