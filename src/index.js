@@ -11,8 +11,9 @@ const COOLDOWN_MINUTES = 30;
 const INTERVAL = "5m";
 const LOOKBACK_DAYS = 5;
 const CANDLE_STRENGTH_MIN = 0.00;
+const ATR_PCT_MAX = 8;  // ← this was missing → added here
 
-/* SYMBOLS same as before */
+/* ============ NIFTY 100 SYMBOLS ============ */
 const SYMBOLS = [
   "ADANIENT.NS", "ADANIPORTS.NS", "APOLLOHOSP.NS", "ASIANPAINT.NS", "AXISBANK.NS",
   "BAJAJ-AUTO.NS", "BAJFINANCE.NS", "BAJAJFINSV.NS", "BPCL.NS", "BHARTIARTL.NS",
@@ -33,7 +34,7 @@ const SYMBOLS = [
   "UNIONBANK.NS", "VEDL.NS"
 ];
 
-/* CONFIDENCE same */
+/* ================= CONFIDENCE ================= */
 function calculateConfidence({ ema9, ema21, rsi }) {
   let score = 0;
   if (ema9 > ema21) score += 40;
@@ -42,7 +43,7 @@ function calculateConfidence({ ema9, ema21, rsi }) {
   return Math.min(score, 100);
 }
 
-/* MAIN */
+/* ================= MAIN ================= */
 async function runScanner() {
   const now = new Date();
   const istDate = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
@@ -68,7 +69,10 @@ async function runScanner() {
       continue;
     }
 
-    if (!candles || candles.length < 60) continue;
+    if (!candles || candles.length < 60) {
+      // console.log(`⚠️ ${symbol} insufficient candles (${candles?.length || 0})`);
+      continue;
+    }
 
     const closes = candles.map(c => c.close);
     const highs = candles.map(c => c.high);
@@ -88,8 +92,7 @@ async function runScanner() {
 
     const emaBullish = ema9 > ema21;
 
-    // Debug
-    console.log(`${symbol} | EMA9:${ema9.toFixed(2)} > EMA21:${ema21.toFixed(2)} | RSI:${rsi.toFixed(2)} | Close:${entry.toFixed(2)} > EMA50:${ema50.toFixed(2)} | Candle:${candleStrength.toFixed(2)}% | ATR%:${(atr/entry*100).toFixed(2)} | EMA Bullish:${emaBullish}`);
+    console.log(`${symbol} | EMA9:${ema9.toFixed(2)} > EMA21:${ema21.toFixed(2)} | RSI:${rsi.toFixed(2)} | Close:${entry.toFixed(2)} > EMA50:${ema50.toFixed(2)} | Candle:${candleStrength.toFixed(2)}% | ATR%:${(atr / entry * 100).toFixed(2)} | EMA Bullish:${emaBullish}`);
 
     if (!emaBullish) {
       console.log(`${symbol} skipped: EMA9 not above EMA21`);
@@ -99,45 +102,46 @@ async function runScanner() {
       console.log(`${symbol} skipped: RSI <=50 (${rsi.toFixed(2)})`);
       continue;
     }
-    // Relaxed: allow doji/flat bullish candle
     if (candleStrength < CANDLE_STRENGTH_MIN) {
       console.log(`${symbol} skipped: candle too weak (${candleStrength.toFixed(2)}%)`);
       continue;
     }
-    // Comment out bearish check for now to allow doji
+    // Temporarily allow doji / flat candles (commented out strict bullish check)
     // if (candle.close <= candle.open) {
-    //   console.log(`${symbol} skipped: bearish/doji candle`);
+    //   console.log(`${symbol} skipped: bearish or doji candle`);
     //   continue;
     // }
     if (entry < ema50) {
-      console.log(`${symbol} skipped: below EMA50`);
+      console.log(`${symbol} skipped: price below EMA50`);
       continue;
     }
     if (rsi > 72) {
-      console.log(`${symbol} skipped: RSI >72 (${rsi.toFixed(2)})`);
+      console.log(`${symbol} skipped: RSI overbought (${rsi.toFixed(2)})`);
       continue;
     }
 
+    // IST time filter
     const hr = istDate.getHours();
     const min = istDate.getMinutes();
     if (hr < 9 || (hr === 9 && min < 15) || hr > 15 || (hr === 15 && min > 30)) {
-      console.log(`${symbol} skipped: out of trading hours`);
+      console.log(`${symbol} skipped: out of trading hours (IST ${hr}:${min})`);
       continue;
     }
 
     const atrPct = (atr / entry) * 100;
     if (atrPct > ATR_PCT_MAX) {
-      console.log(`${symbol} skipped: ATR% ${atrPct.toFixed(2)} > ${ATR_PCT_MAX}`);
+      console.log(`${symbol} skipped: high volatility ATR% ${atrPct.toFixed(2)}`);
       continue;
     }
 
     const confidence = calculateConfidence({ ema9, ema21, rsi });
     if (confidence < MIN_CONFIDENCE) {
-      console.log(`${symbol} skipped: confidence ${confidence} < ${MIN_CONFIDENCE}`);
+      console.log(`${symbol} skipped: low confidence ${confidence}`);
       continue;
     }
 
     console.log(`✅ BUY FOUND ${symbol} | Confidence ${confidence} | RSI ${rsi.toFixed(2)} | ATR% ${atrPct.toFixed(2)} | Candle ${candleStrength.toFixed(2)}%`);
+    // Add alert logic here (Telegram, Google Sheet, etc.)
   }
 
   console.log(`🏁 Scanner completed. Symbols processed: ${processed}`);
