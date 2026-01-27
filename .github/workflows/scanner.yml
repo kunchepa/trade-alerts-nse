@@ -1,37 +1,48 @@
-name: NSE Trade Scanner
+name: Trade Alerts Scheduler
 
 on:
-  # Every 5 minutes IST 08:30–16:30 (UTC 03:00–11:00)
+  # ⏰ Runs every 5 minutes during Indian market hours
+  # UTC 03:00–11:00 ≈ IST 08:30–16:30
   schedule:
-    - cron: "*/5 3-10 * * 1-5"
+    - cron: "*/5 3-11 * * 1-5"
 
+  # ▶️ Manual trigger from GitHub UI
   workflow_dispatch:
 
+  # 🌐 External API / webhook trigger
+  repository_dispatch:
+    types: [external_trigger]
+
+# 🔒 Prevent overlapping executions
 concurrency:
-  group: nse-scanner
+  group: trade-alerts-nse
   cancel-in-progress: true
 
 jobs:
-  scan:
+  run-scanner:
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
     steps:
-      - name: Checkout
+      # 1️⃣ Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node
+      # 2️⃣ Setup Node.js
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 18
 
-      - name: Install deps
+      # 3️⃣ Install dependencies
+      - name: Install dependencies
         run: npm install --no-audit --no-fund
 
-      - name: Run scanner
-        run: npm start
+      # 4️⃣ Run trade scanner
+      - name: Run Scanner
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+        run: npm start
