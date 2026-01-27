@@ -3,14 +3,18 @@ import { EMA, RSI } from "technicalindicators";
 
 const yahooFinance = new YahooFinance();
 
+/* ================= CONFIG ================= */
+
 const SL_PCT = 0.7;
 const TARGET_PCT = 1.4;
 const MIN_CONFIDENCE = 60;
 const COOLDOWN_MINUTES = 30;
+
 const INTERVAL = "5m";
 const LOOKBACK_DAYS = 5;
 
-/* FULL NIFTY 100 */
+/* ============ NIFTY 100 (with your symbol changes) ============ */
+
 const SYMBOLS = [
 "ADANIENT.NS","ADANIPORTS.NS","APOLLOHOSP.NS","ASIANPAINT.NS","AXISBANK.NS",
 "BAJAJ-AUTO.NS","BAJFINANCE.NS","BAJAJFINSV.NS","BPCL.NS","BHARTIARTL.NS",
@@ -32,7 +36,11 @@ const SYMBOLS = [
 "UNIONBANK.NS","VEDL.NS","ETERNAL.NS"
 ];
 
+/* ================= MEMORY ================= */
+
 const alertedStocks = new Map();
+
+/* ================= CONFIDENCE ================= */
 
 function calculateConfidence({ ema9, ema21, rsi }) {
   let score = 0;
@@ -41,6 +49,8 @@ function calculateConfidence({ ema9, ema21, rsi }) {
   if (ema9 > ema21 && rsi > 50) score += 30;
   return Math.min(score, 100);
 }
+
+/* ================= MAIN ================= */
 
 async function runScanner() {
 
@@ -57,57 +67,70 @@ async function runScanner() {
 
     let candles;
 
+    // ---- Yahoo isolated ----
     try {
-      const result = await yahooFinance.chart(symbol,{
+      const result = await yahooFinance.chart(symbol, {
         interval: INTERVAL,
         period1,
         period2
       });
-
       candles = result?.quotes;
-
-    } catch (e) {
+    } catch {
       console.log(`⚠️ ${symbol} yahoo failed`);
       continue;
     }
 
     if (!candles || candles.length < 50) continue;
 
-    const closes = candles.map(c=>c.close).filter(Boolean);
+    const closes = candles.map(c => c.close).filter(Boolean);
     if (closes.length < 50) continue;
 
-    const ema9 = EMA.calculate({period:9,values:closes}).at(-1);
-    const ema21 = EMA.calculate({period:21,values:closes}).at(-1);
-    const ema50 = EMA.calculate({period:50,values:closes}).at(-1);
+    const ema9 = EMA.calculate({ period: 9, values: closes }).at(-1);
+    const ema21 = EMA.calculate({ period: 21, values: closes }).at(-1);
+    const ema50 = EMA.calculate({ period: 50, values: closes }).at(-1);
 
-    const prev9 = EMA.calculate({period:9,values:closes.slice(0,-1)}).at(-1);
-    const prev21 = EMA.calculate({period:21,values:closes.slice(0,-1)}).at(-1);
+    const prev9 = EMA.calculate({ period: 9, values: closes.slice(0, -1) }).at(-1);
+    const prev21 = EMA.calculate({ period: 21, values: closes.slice(0, -1) }).at(-1);
 
-    const rsi = RSI.calculate({period:14,values:closes}).at(-1);
+    const rsi = RSI.calculate({ period: 14, values: closes }).at(-1);
 
-    if(!ema9||!ema21||!ema50||!prev9||!prev21||!rsi) continue;
+    if (!ema9 || !ema21 || !ema50 || !prev9 || !prev21 || !rsi) continue;
 
-    const crossover = prev9<=prev21 && ema9>ema21;
-    if(!crossover||rsi<=50) continue;
+    /* ===== 2-CANDLE CROSSOVER WINDOW (NEW) ===== */
+
+    const crossover =
+      (prev9 <= prev21 && ema9 > ema21) ||
+      (ema9 > ema21 && closes.at(-2) > closes.at(-3));
+
+    if (!crossover || rsi <= 50) continue;
+
+    /* ===== SAFETY FILTERS ===== */
 
     const entry = closes.at(-1);
-
     const candle = candles.at(-1);
-    const strength = ((candle.close-candle.open)/candle.open)*100;
-    if(strength<0.15) continue;
 
-    if(entry<ema50) continue;
-    if(rsi>68) continue;
+    const candleStrength =
+      ((candle.close - candle.open) / candle.open) * 100;
 
-    const recentHigh=Math.max(...closes.slice(-14));
-    const recentLow=Math.min(...closes.slice(-14));
-    const atr=((recentHigh-recentLow)/entry)*100;
-    if(atr>4) continue;
+    if (candleStrength < 0.15) continue;
+    if (entry < ema50) continue;
+    if (rsi > 68) continue;
 
-    const confidence=calculateConfidence({ema9,ema21,rsi});
-    if(confidence<MIN_CONFIDENCE) continue;
+    // IST time filter
+    const ist = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
+    const hr = ist.getHours();
+    if (hr < 9 || hr === 12 || hr === 13) continue;
 
-    console.log(`✅ BUY FOUND ${symbol}`);
+    // ATR proxy
+    const recentHigh = Math.max(...closes.slice(-14));
+    const recentLow = Math.min(...closes.slice(-14));
+    const atrPct = ((recentHigh - recentLow) / entry) * 100;
+    if (atrPct > 4) continue;
+
+    const confidence = calculateConfidence({ ema9, ema21, rsi });
+    if (confidence < MIN_CONFIDENCE) continue;
+
+    console.log(`✅ BUY FOUND ${symbol} | Confidence ${confidence}`);
 
   }
 
