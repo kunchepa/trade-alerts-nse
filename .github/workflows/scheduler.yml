@@ -2,10 +2,9 @@ name: Trade Alerts Scheduler
 
 on:
   schedule:
-    # Every 5 min during NSE active hours (UTC = IST - 5:30)
-    # 03:45 UTC = 09:15 IST → 10:00 UTC = 15:30 IST
-    - cron: '*/5 4-10 * * 1-5'   # Mon-Fri, 04:00-10:00 UTC (~09:30-15:30 IST)
-  workflow_dispatch:            # Manual run button
+    # Every 5 minutes during NSE active hours (UTC ≈ 09:30–15:30 IST)
+    - cron: '*/5 4-10 * * 1-5'   # Mon-Fri, 04:00–10:00 UTC
+  workflow_dispatch:             # Manual trigger from GitHub UI
   repository_dispatch:
     types: [external_trigger]
 
