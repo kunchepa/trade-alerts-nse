@@ -25,7 +25,7 @@ const INTERVAL = "5m";
 const LOOKBACK_DAYS = 5;
 
 /* =========================
-   STRICT NIFTY 100 SYMBOLS (FULL)
+   STRICT NIFTY 100 SYMBOLS
 ========================= */
 
 const SYMBOLS = [
@@ -40,7 +40,6 @@ const SYMBOLS = [
   "SHREECEM.NS","SUNPHARMA.NS","TATACONSUM.NS","TATAMOTORS.NS","TATASTEEL.NS",
   "TCS.NS","TECHM.NS","TITAN.NS","ULTRACEMCO.NS","UPL.NS","WIPRO.NS",
 
-  // NEXT 50
   "ABB.NS","ACC.NS","AMBUJACEM.NS","ASHOKLEY.NS","BANDHANBNK.NS","BEL.NS",
   "BHEL.NS","BIOCON.NS","CANBK.NS","CHOLAFIN.NS","DLF.NS","GAIL.NS",
   "HAL.NS","HAVELLS.NS","ICICIPRULI.NS","IDFCFIRSTB.NS","IGL.NS",
@@ -91,18 +90,12 @@ async function runScanner() {
       });
 
       const candles = result?.quotes;
-      if (!Array.isArray(candles) || candles.length < 50) {
-        console.log(`⚠️ ${symbol} insufficient data`);
-        continue;
-      }
+      if (!Array.isArray(candles) || candles.length < 50) continue;
 
       const validCandles = candles.filter(
         c => c.open && c.close && c.high && c.low
       );
-      if (validCandles.length < 50) {
-        console.log(`⚠️ ${symbol} invalid OHLC`);
-        continue;
-      }
+      if (validCandles.length < 50) continue;
 
       const closes = validCandles.map(c => c.close);
 
@@ -122,14 +115,15 @@ async function runScanner() {
       const freshCrossover = prevEma9 <= prevEma21 && ema9 > ema21;
       if (!freshCrossover || rsi <= 50) continue;
 
-      /* ========= SAFETY FILTERS (UNCHANGED) ========= */
+      /* ========= SAFETY FILTERS (SLIGHTLY RELAXED) ========= */
 
       const entry = closes.at(-1);
       const lastCandle = validCandles.at(-1);
 
+      // 🔥 Candle strength relaxed
       const candleStrength =
         ((lastCandle.close - lastCandle.open) / lastCandle.open) * 100;
-      if (candleStrength < 0.25) continue;
+      if (candleStrength < 0.15) continue;
 
       if (entry < ema50) continue;
       if (rsi > 68) continue;
@@ -139,10 +133,11 @@ async function runScanner() {
       const hour = timeIST.getHours();
       if (hour < 9 || hour === 12 || hour === 13) continue;
 
+      // 🔥 ATR relaxed
       const recentHigh = Math.max(...closes.slice(-14));
       const recentLow = Math.min(...closes.slice(-14));
       const atrPct = ((recentHigh - recentLow) / entry) * 100;
-      if (atrPct > 3) continue;
+      if (atrPct > 4) continue;
 
       /* ========= CONFIDENCE (UNCHANGED) ========= */
 
