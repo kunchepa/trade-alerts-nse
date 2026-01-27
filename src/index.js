@@ -1,16 +1,14 @@
 /**
- * trade-alerts-nse
- * FINAL PRODUCTION VERSION
+ * trade-alerts-nse – FIXED PRODUCTION VERSION
  */
 
-import YahooFinance from "yahoo-finance2";
+import yahooFinance from "yahoo-finance2";
 import { EMA, RSI, ATR } from "technicalindicators";
 import fetch from "node-fetch";
 import { GoogleSpreadsheet } from "google-spreadsheet";
 import { JWT } from "google-auth-library";
 
-const yahoo = new YahooFinance();
-
+/* CONFIG */
 const SL_PCT = 0.7;
 const TARGET_PCT = 1.4;
 const MIN_CONFIDENCE = 60;
@@ -20,9 +18,13 @@ const ATR_PCT_MAX = 8;
 const CANDLE_STRENGTH_MIN = 0.05;
 const RSI_UPPER = 72;
 
-const REQUIRED = ["TELEGRAM_BOT_TOKEN","TELEGRAM_CHAT_ID","SPREADSHEET_ID","GOOGLE_SERVICE_ACCOUNT_JSON"];
-for(const k of REQUIRED) if(!process.env[k]) throw new Error(`Missing ${k}`);
+/* ENV CHECK */
+["TELEGRAM_BOT_TOKEN","TELEGRAM_CHAT_ID","SPREADSHEET_ID","GOOGLE_SERVICE_ACCOUNT_JSON"]
+.forEach(k=>{
+  if(!process.env[k]) throw new Error(`Missing ${k}`);
+});
 
+/* SYMBOLS */
 const SYMBOLS = [
 "RELIANCE.NS","TCS.NS","HDFCBANK.NS","INFY.NS","ICICIBANK.NS","KOTAKBANK.NS","LT.NS",
 "SBIN.NS","AXISBANK.NS","BAJFINANCE.NS","BHARTIARTL.NS","ITC.NS","HINDUNILVR.NS","MARUTI.NS",
@@ -39,42 +41,62 @@ const SYMBOLS = [
 "TVSMOTOR.NS","CHOLAFIN.NS","MGL.NS","IGL.NS","APOLLOHOSP.NS","TMCV.NS"
 ];
 
+/* HELPERS */
+
 async function telegram(msg){
-  await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`,{
-    method:"POST",
-    headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({chat_id:process.env.TELEGRAM_CHAT_ID,text:msg})
-  });
+  try{
+    await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`,{
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body:JSON.stringify({ chat_id:process.env.TELEGRAM_CHAT_ID, text:msg })
+    });
+  }catch(e){ console.log("Telegram error"); }
 }
 
 async function sheet(row){
   const c=JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
-  const auth=new JWT({email:c.client_email,key:c.private_key,scopes:["https://www.googleapis.com/auth/spreadsheets"]});
+  const auth=new JWT({
+    email:c.client_email,
+    key:c.private_key,
+    scopes:["https://www.googleapis.com/auth/spreadsheets"]
+  });
   const doc=new GoogleSpreadsheet(process.env.SPREADSHEET_ID,auth);
   await doc.loadInfo();
   await doc.sheetsByTitle["Alerts"].addRow(row);
 }
 
-function confidence(e9,e21,r){ return (e9>e21?40:0)+(r>55&&r<RSI_UPPER?30:0)+(r>50?30:0); }
+function confidence(e9,e21,r){
+  let s=0;
+  if(e9>e21) s+=40;
+  if(r>55&&r<RSI_UPPER) s+=30;
+  if(r>50) s+=30;
+  return Math.min(s,100);
+}
+
+/* MAIN */
 
 async function run(){
 
   const p2=Math.floor(Date.now()/1000);
   const p1=p2-LOOKBACK_DAYS*86400;
 
-  const ist=new Date(Date.now()+5.5*3600000);
+  const ist=new Date(Date.now()+19800000);
   const hr=ist.getHours(), min=ist.getMinutes();
 
   console.log("🚀 Started",ist.toLocaleString("en-IN"));
 
-  for(const s of SYMBOLS){
-    try{
+  let scanned=0;
 
-      const r=await yahoo.chart(s,{interval:INTERVAL,period1:p1,period2:p2});
+  for(const s of SYMBOLS){
+    scanned++;
+    try{
+      const r=await yahooFinance.chart(s,{interval:INTERVAL,period1:p1,period2:p2});
       const q=r?.quotes;
       if(!q||q.length<60) continue;
 
-      const close=q.map(x=>x.close), high=q.map(x=>x.high), low=q.map(x=>x.low);
+      const close=q.map(x=>x.close).filter(Boolean);
+      const high=q.map(x=>x.high).filter(Boolean);
+      const low=q.map(x=>x.low).filter(Boolean);
 
       const e9=EMA.calculate({period:9,values:close}).at(-1);
       const e21=EMA.calculate({period:21,values:close}).at(-1);
@@ -83,6 +105,8 @@ async function run(){
       const p21=EMA.calculate({period:21,values:close.slice(0,-1)}).at(-1);
       const rsi=RSI.calculate({period:14,values:close}).at(-1);
       const atr=ATR.calculate({period:14,high,low,close}).at(-1);
+
+      if(!e9||!e21||!e50||!p9||!p21||!rsi||!atr) continue;
 
       if(p9>p21||e9<=e21) continue;
       if(rsi<=50||rsi>RSI_UPPER) continue;
@@ -94,7 +118,7 @@ async function run(){
       const atrPct=(atr/close.at(-1))*100;
       if(atrPct>ATR_PCT_MAX) continue;
 
-      if(hr<9||(hr==9&&min<15)||hr>15||(hr==15&&min>30)) continue;
+      if(hr<9||(hr===9&&min<15)||hr>15||(hr===15&&min>30)) continue;
 
       const conf=confidence(e9,e21,rsi);
       if(conf<MIN_CONFIDENCE) continue;
@@ -108,10 +132,12 @@ async function run(){
 
       console.log("✅",s);
 
-    }catch{ console.log(`${s} yahoo fail`); }
+    }catch{
+      console.log(`${s} yahoo fail`);
+    }
   }
 
-  console.log("🏁 Done");
+  console.log("🏁 Done. Symbols scanned:",scanned);
 }
 
 await run();
