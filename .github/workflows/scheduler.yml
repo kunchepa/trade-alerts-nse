@@ -2,8 +2,7 @@ name: Trade Alerts Scheduler
 
 on:
   schedule:
-    - cron: "*/5 4-10 * * 1-5"
-
+    - cron: "*/5 3-10 * * 1-5"   # IST 09:00–15:30
   workflow_dispatch:
 
 concurrency:
@@ -13,6 +12,7 @@ concurrency:
 jobs:
   run-scanner:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       - uses: actions/checkout@v4
