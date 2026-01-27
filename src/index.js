@@ -1,6 +1,6 @@
 /**
  * trade-alerts-nse
- * FINAL STABLE VERSION
+ * FINAL PRODUCTION VERSION
  */
 
 import YahooFinance from "yahoo-finance2";
@@ -9,38 +9,19 @@ import fetch from "node-fetch";
 import { GoogleSpreadsheet } from "google-spreadsheet";
 import { JWT } from "google-auth-library";
 
-/* ========================= */
-const yahooFinance = new YahooFinance();
-/* ========================= */
+const yahoo = new YahooFinance();
 
 const SL_PCT = 0.7;
 const TARGET_PCT = 1.4;
 const MIN_CONFIDENCE = 60;
-const COOLDOWN_MINUTES = 30;
 const INTERVAL = "5m";
 const LOOKBACK_DAYS = 5;
 const ATR_PCT_MAX = 8;
 const CANDLE_STRENGTH_MIN = 0.05;
 const RSI_UPPER = 72;
 
-const alertedStocks = new Map();
-
-/* ENV */
-
-const REQUIRED_ENV = [
-  "TELEGRAM_BOT_TOKEN",
-  "TELEGRAM_CHAT_ID",
-  "SPREADSHEET_ID",
-  "GOOGLE_SERVICE_ACCOUNT_JSON"
-];
-
-for (const k of REQUIRED_ENV) {
-  if (!process.env[k]) throw new Error(`Missing env ${k}`);
-}
-
-console.log("✅ ENV loaded");
-
-/* SYMBOLS */
+const REQUIRED = ["TELEGRAM_BOT_TOKEN","TELEGRAM_CHAT_ID","SPREADSHEET_ID","GOOGLE_SERVICE_ACCOUNT_JSON"];
+for(const k of REQUIRED) if(!process.env[k]) throw new Error(`Missing ${k}`);
 
 const SYMBOLS = [
 "RELIANCE.NS","TCS.NS","HDFCBANK.NS","INFY.NS","ICICIBANK.NS","KOTAKBANK.NS","LT.NS",
@@ -58,78 +39,56 @@ const SYMBOLS = [
 "TVSMOTOR.NS","CHOLAFIN.NS","MGL.NS","IGL.NS","APOLLOHOSP.NS","TMCV.NS"
 ];
 
-/* TELEGRAM */
-
-async function sendTelegram(msg) {
-  await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: process.env.TELEGRAM_CHAT_ID, text: msg })
+async function telegram(msg){
+  await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`,{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({chat_id:process.env.TELEGRAM_CHAT_ID,text:msg})
   });
 }
 
-/* SHEETS */
-
-async function logToSheet(row) {
-  const creds = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
-  const auth = new JWT({
-    email: creds.client_email,
-    key: creds.private_key,
-    scopes: ["https://www.googleapis.com/auth/spreadsheets"]
-  });
-
-  const doc = new GoogleSpreadsheet(process.env.SPREADSHEET_ID, auth);
+async function sheet(row){
+  const c=JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
+  const auth=new JWT({email:c.client_email,key:c.private_key,scopes:["https://www.googleapis.com/auth/spreadsheets"]});
+  const doc=new GoogleSpreadsheet(process.env.SPREADSHEET_ID,auth);
   await doc.loadInfo();
   await doc.sheetsByTitle["Alerts"].addRow(row);
 }
 
-/* CONFIDENCE */
+function confidence(e9,e21,r){ return (e9>e21?40:0)+(r>55&&r<RSI_UPPER?30:0)+(r>50?30:0); }
 
-function confidence(ema9, ema21, rsi) {
-  let s = 0;
-  if (ema9 > ema21) s += 40;
-  if (rsi > 55 && rsi < RSI_UPPER) s += 30;
-  if (rsi > 50) s += 30;
-  return s;
-}
+async function run(){
 
-/* MAIN */
+  const p2=Math.floor(Date.now()/1000);
+  const p1=p2-LOOKBACK_DAYS*86400;
 
-async function run() {
+  const ist=new Date(Date.now()+5.5*3600000);
+  const hr=ist.getHours(), min=ist.getMinutes();
 
-  const p2 = Math.floor(Date.now()/1000);
-  const p1 = p2 - LOOKBACK_DAYS*86400;
-  const now = Date.now();
+  console.log("🚀 Started",ist.toLocaleString("en-IN"));
 
-  const ist = new Date(now + 5.5*3600000);
-  const hr = ist.getHours();
-  const min = ist.getMinutes();
+  for(const s of SYMBOLS){
+    try{
 
-  console.log(`🚀 Started IST ${ist}`);
+      const r=await yahoo.chart(s,{interval:INTERVAL,period1:p1,period2:p2});
+      const q=r?.quotes;
+      if(!q||q.length<60) continue;
 
-  for (const s of SYMBOLS) {
+      const close=q.map(x=>x.close), high=q.map(x=>x.high), low=q.map(x=>x.low);
 
-    try {
-
-      const res = await yahooFinance.chart(s,{interval:INTERVAL,period1:p1,period2:p2});
-      const c = res?.quotes;
-      if(!c || c.length<60) continue;
-
-      const close=c.map(x=>x.close), high=c.map(x=>x.high), low=c.map(x=>x.low);
-
-      const ema9=EMA.calculate({period:9,values:close}).at(-1);
-      const ema21=EMA.calculate({period:21,values:close}).at(-1);
-      const ema50=EMA.calculate({period:50,values:close}).at(-1);
+      const e9=EMA.calculate({period:9,values:close}).at(-1);
+      const e21=EMA.calculate({period:21,values:close}).at(-1);
+      const e50=EMA.calculate({period:50,values:close}).at(-1);
       const p9=EMA.calculate({period:9,values:close.slice(0,-1)}).at(-1);
       const p21=EMA.calculate({period:21,values:close.slice(0,-1)}).at(-1);
       const rsi=RSI.calculate({period:14,values:close}).at(-1);
       const atr=ATR.calculate({period:14,high,low,close}).at(-1);
 
-      if(p9>p21 || ema9<=ema21) continue;
+      if(p9>p21||e9<=e21) continue;
       if(rsi<=50||rsi>RSI_UPPER) continue;
-      if(close.at(-1)<ema50) continue;
+      if(close.at(-1)<e50) continue;
 
-      const candle=((c.at(-1).close-c.at(-1).open)/c.at(-1).open)*100;
+      const candle=((q.at(-1).close-q.at(-1).open)/q.at(-1).open)*100;
       if(candle<CANDLE_STRENGTH_MIN) continue;
 
       const atrPct=(atr/close.at(-1))*100;
@@ -137,21 +96,19 @@ async function run() {
 
       if(hr<9||(hr==9&&min<15)||hr>15||(hr==15&&min>30)) continue;
 
-      const conf=confidence(ema9,ema21,rsi);
+      const conf=confidence(e9,e21,rsi);
       if(conf<MIN_CONFIDENCE) continue;
 
       const entry=close.at(-1);
       const sl=entry*(1-SL_PCT/100);
       const tgt=entry*(1+TARGET_PCT/100);
 
-      await sendTelegram(`BUY ${s}\nEntry ${entry.toFixed(2)}\nSL ${sl.toFixed(2)}\nTarget ${tgt.toFixed(2)}`);
+      await telegram(`BUY ${s}\nEntry ${entry.toFixed(2)}\nSL ${sl.toFixed(2)}\nTarget ${tgt.toFixed(2)}`);
+      await sheet([ist.toLocaleString("en-IN"),s,"BUY",entry.toFixed(2),tgt.toFixed(2),sl.toFixed(2),"PENDING",conf]);
 
-      await logToSheet([ist.toLocaleString("en-IN"),s,"BUY",entry.toFixed(2),tgt.toFixed(2),sl.toFixed(2),"PENDING",conf]);
+      console.log("✅",s);
 
-      console.log(`✅ ${s}`);
-
-    } catch(e){ console.log(`${s} fail`); }
-
+    }catch{ console.log(`${s} yahoo fail`); }
   }
 
   console.log("🏁 Done");
