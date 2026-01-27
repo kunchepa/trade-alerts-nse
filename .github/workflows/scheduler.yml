@@ -2,7 +2,9 @@ name: Trade Alerts Scheduler
 
 on:
   schedule:
+    # Every 5 minutes IST 09:15 – 15:30 (UTC 03:45 – 10:00)
     - cron: "*/5 3-10 * * 1-5"
+
   workflow_dispatch:
 
 jobs:
