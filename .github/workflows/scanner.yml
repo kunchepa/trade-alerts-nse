@@ -1,14 +1,12 @@
-name: Trade Alerts Scheduler
+name: NSE Trade Scanner
 
 on:
   schedule:
-    # Every 5 minutes IST 09:15 – 15:30 (UTC 03:45 – 10:00)
     - cron: "*/5 3-10 * * 1-5"
-
   workflow_dispatch:
 
 jobs:
-  run-scanner:
+  scan:
     runs-on: ubuntu-latest
 
     steps:
@@ -18,9 +16,11 @@ jobs:
         with:
           node-version: 22
 
-      - run: npm install --no-audit --no-fund
+      - name: Install
+        run: npm install --no-audit --no-fund
 
-      - run: npm start
+      - name: Run Bot
+        run: npm start
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
