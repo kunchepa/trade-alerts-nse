@@ -2,11 +2,10 @@ name: Trade Alerts Scheduler
 
 on:
   schedule:
-    # Every 5 minutes during NSE active hours (UTC equivalent of ~09:30–15:30 IST)
-    - cron: "*/5 4-10 * * 1-5"   # Mon-Fri, 04:00–10:00 UTC → good coverage
-    # Optional extra: early morning buffer if needed
-    # - cron: "*/15 3 * * 1-5"   # 03:00–03:59 UTC (08:30–09:29 IST) — pre-open check optional
-  workflow_dispatch:          # Manual trigger from GitHub UI
+    # Every 5 min during NSE active hours (UTC = IST - 5:30)
+    # 03:45 UTC = 09:15 IST → 10:00 UTC = 15:30 IST
+    - cron: '*/5 4-10 * * 1-5'   # Mon-Fri, 04:00-10:00 UTC (~09:30-15:30 IST)
+  workflow_dispatch:            # Manual run button
   repository_dispatch:
     types: [external_trigger]
 
@@ -17,7 +16,7 @@ concurrency:
 jobs:
   run-scanner:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -26,9 +25,15 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: 'npm'
 
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Run Scanner
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
         run: npm start
