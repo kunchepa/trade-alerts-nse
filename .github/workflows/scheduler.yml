@@ -1,11 +1,12 @@
 name: Trade Alerts Scheduler
 
 on:
-  # Runs every 5 minutes during NSE hours (safe window)
   schedule:
-    - cron: "*/5 4-10 * * 1-5"
-
-  workflow_dispatch:
+    # Every 5 minutes during NSE active hours (UTC equivalent of ~09:30–15:30 IST)
+    - cron: "*/5 4-10 * * 1-5"   # Mon-Fri, 04:00–10:00 UTC → good coverage
+    # Optional extra: early morning buffer if needed
+    # - cron: "*/15 3 * * 1-5"   # 03:00–03:59 UTC (08:30–09:29 IST) — pre-open check optional
+  workflow_dispatch:          # Manual trigger from GitHub UI
   repository_dispatch:
     types: [external_trigger]
 
@@ -17,7 +18,6 @@ jobs:
   run-scanner:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
