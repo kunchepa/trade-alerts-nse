@@ -6,14 +6,14 @@ const yahooFinance = new YahooFinance();
 /* ================= CONFIG ================= */
 const SL_PCT = 0.7;
 const TARGET_PCT = 1.4;
-const MIN_CONFIDENCE = 50; // relaxed for testing
+const MIN_CONFIDENCE = 60;
 const COOLDOWN_MINUTES = 30;
 const INTERVAL = "5m";
 const LOOKBACK_DAYS = 5;
-const CANDLE_STRENGTH_MIN = 0.05; // relaxed
-const ATR_PCT_MAX = 8; // relaxed for testing
+const CANDLE_STRENGTH_MIN = 0.00; // allow flat if bullish
+const ATR_PCT_MAX = 8; // loose for testing
 
-/* ============ NIFTY 100 SYMBOLS (fixed) ============ */
+/* ============ NIFTY 100 SYMBOLS ============ */
 const SYMBOLS = [
   "ADANIENT.NS", "ADANIPORTS.NS", "APOLLOHOSP.NS", "ASIANPAINT.NS", "AXISBANK.NS",
   "BAJAJ-AUTO.NS", "BAJFINANCE.NS", "BAJAJFINSV.NS", "BPCL.NS", "BHARTIARTL.NS",
@@ -23,7 +23,7 @@ const SYMBOLS = [
   "IOC.NS", "INDUSINDBK.NS", "INFY.NS", "JSWSTEEL.NS", "KOTAKBANK.NS",
   "LT.NS", "M&M.NS", "MARUTI.NS", "NESTLEIND.NS", "NTPC.NS",
   "ONGC.NS", "POWERGRID.NS", "RELIANCE.NS", "SBIN.NS", "SBILIFE.NS",
-  "SHREECEM.NS", "SUNPHARMA.NS", "TATACONSUM.NS", "TMCV.NS", "TATASTEEL.NS", // TATAMOTORS → TMCV
+  "SHREECEM.NS", "SUNPHARMA.NS", "TATACONSUM.NS", "TMCV.NS", "TATASTEEL.NS",
   "TCS.NS", "TECHM.NS", "TITAN.NS", "ULTRACEMCO.NS", "UPL.NS", "WIPRO.NS",
   "ABB.NS", "ACC.NS", "AMBUJACEM.NS", "ASHOKLEY.NS", "BANDHANBNK.NS", "BEL.NS",
   "BHEL.NS", "BIOCON.NS", "CANBK.NS", "CHOLAFIN.NS", "DLF.NS", "GAIL.NS",
@@ -34,14 +34,11 @@ const SYMBOLS = [
   "UNIONBANK.NS", "VEDL.NS"
 ];
 
-/* ================= MEMORY ================= */
-const alertedStocks = new Map();
-
 /* ================= CONFIDENCE ================= */
 function calculateConfidence({ ema9, ema21, rsi }) {
   let score = 0;
   if (ema9 > ema21) score += 40;
-  if (rsi > 55 && rsi < 75) score += 30; // relaxed
+  if (rsi > 55 && rsi < 72) score += 30;
   if (ema9 > ema21 && rsi > 50) score += 30;
   return Math.min(score, 100);
 }
@@ -49,9 +46,8 @@ function calculateConfidence({ ema9, ema21, rsi }) {
 /* ================= MAIN ================= */
 async function runScanner() {
   const now = new Date();
-  const istOffset = 5.5 * 60 * 60 * 1000;
-  const istDate = new Date(now.getTime() + istOffset);
-  console.log(`🚀 Scanner started at UTC: ${now.toISOString()} | IST: ${istDate.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}`);
+  const istDate = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+  console.log(`🚀 Scanner started at UTC: ${now.toISOString()} | IST: ${istDate.toLocaleString('en-IN')}`);
 
   let processed = 0;
   const unixNow = Math.floor(Date.now() / 1000);
@@ -93,55 +89,48 @@ async function runScanner() {
     const prev21 = EMA.calculate({ period: 21, values: prevCloses }).at(-1);
 
     const prevPrevCloses = closes.slice(0, -2);
-    if (prevPrevCloses.length < 50) {
-      console.log(`⚠️ ${symbol} insufficient for prev-prev EMA`);
-      continue;
-    }
+    if (prevPrevCloses.length < 50) continue;
     const prevPrev9 = EMA.calculate({ period: 9, values: prevPrevCloses }).at(-1);
     const prevPrev21 = EMA.calculate({ period: 21, values: prevPrevCloses }).at(-1);
 
-    if (!ema9 || !ema21 || !ema50 || !prev9 || !prev21 || !prevPrev9 || !prevPrev21 || !rsi || !atr) {
-      console.log(`⚠️ ${symbol} indicator calc failed`);
-      continue;
-    }
+    if (!ema9 || !ema21 || !ema50 || !rsi || !atr) continue;
 
-    const crossoverCurrent = (prev9 <= prev21 && ema9 > ema21);
-    const crossoverPrev = (prevPrev9 <= prevPrev21 && prev9 > prev21);
-    const crossoverRecent = crossoverCurrent || crossoverPrev;
+    // Relaxed: just EMA9 > EMA21 (remove strict recent cross for testing)
+    const emaBullish = ema9 > ema21;
 
     const entry = closes.at(-1);
     const candle = candles.at(-1);
     const candleStrength = ((candle.close - candle.open) / candle.open) * 100;
 
-    // Debug log: always print key values for insight
-    console.log(`${symbol} | EMA9:${ema9?.toFixed(2)} > EMA21:${ema21?.toFixed(2)} | RSI:${rsi?.toFixed(2)} | Close:${entry?.toFixed(2)} > EMA50:${ema50?.toFixed(2)} | Candle:${candleStrength.toFixed(2)}% | ATR%:${(atr/entry*100).toFixed(2)} | Crossover:${crossoverRecent}`);
+    // Debug log
+    console.log(`${symbol} | EMA9:${ema9.toFixed(2)} > EMA21:${ema21.toFixed(2)} | RSI:${rsi.toFixed(2)} | Close:${entry.toFixed(2)} > EMA50:${ema50.toFixed(2)} | Candle:${candleStrength.toFixed(2)}% | ATR%:${(atr/entry*100).toFixed(2)} | EMA Bullish:${emaBullish}`);
 
-    if (!crossoverRecent) {
-      console.log(`${symbol} skipped: no recent crossover`);
+    if (!emaBullish) {
+      console.log(`${symbol} skipped: EMA9 not above EMA21`);
       continue;
     }
     if (rsi <= 50) {
       console.log(`${symbol} skipped: RSI <=50 (${rsi.toFixed(2)})`);
       continue;
     }
-    if (candleStrength < CANDLE_STRENGTH_MIN || candle.close <= candle.open) {
-      console.log(`${symbol} skipped: weak/not bullish candle ${candleStrength.toFixed(2)}%`);
+    if (candle.close <= candle.open) {
+      console.log(`${symbol} skipped: bearish or doji candle (close <= open, strength ${candleStrength.toFixed(2)}%)`);
       continue;
     }
     if (entry < ema50) {
       console.log(`${symbol} skipped: price below EMA50`);
       continue;
     }
-    if (rsi > 75) {
+    if (rsi > 72) {
       console.log(`${symbol} skipped: RSI overbought (${rsi.toFixed(2)})`);
       continue;
     }
 
-    // IST time filter: 9:15 - 15:30 IST
+    // IST time filter
     const hr = istDate.getHours();
     const min = istDate.getMinutes();
     if (hr < 9 || (hr === 9 && min < 15) || hr > 15 || (hr === 15 && min > 30)) {
-      console.log(`${symbol} skipped: out of trading hours (IST: ${hr}:${min})`);
+      console.log(`${symbol} skipped: out of trading hours (IST ${hr}:${min})`);
       continue;
     }
 
@@ -158,7 +147,7 @@ async function runScanner() {
     }
 
     console.log(`✅ BUY FOUND ${symbol} | Confidence ${confidence} | RSI ${rsi.toFixed(2)} | ATR% ${atrPct.toFixed(2)} | Candle ${candleStrength.toFixed(2)}%`);
-    // Add your alert here (e.g., Google Sheet write, Telegram)
+    // Add alert (Telegram/Google Sheet) here
   }
 
   console.log(`🏁 Scanner completed. Symbols processed: ${processed}`);
