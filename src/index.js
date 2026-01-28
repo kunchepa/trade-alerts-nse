@@ -94,15 +94,13 @@ let sheet;
 async function initSheet() {
   const creds = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
 
-  // google-spreadsheet v4 FIX
-  const jwt = new JWT({
-    email: creds.client_email,
-    key: creds.private_key,
-    scopes: ["https://www.googleapis.com/auth/spreadsheets"]
+  const doc = new GoogleSpreadsheet(process.env.SPREADSHEET_ID);
+
+  await doc.useServiceAccountAuth({
+    client_email: creds.client_email,
+    private_key: creds.private_key
   });
 
-  const doc = new GoogleSpreadsheet(process.env.SPREADSHEET_ID);
-  await doc.useOAuth2Client(jwt);
   await doc.loadInfo();
 
   sheet = doc.sheetsByTitle["Alerts"];
@@ -110,6 +108,7 @@ async function initSheet() {
 
   console.log("✅ Google Sheet connected");
 }
+
 
 // ================= CONFIDENCE =================
 
