@@ -2,13 +2,6 @@ import yahooFinance from "yahoo-finance2";
 import { EMA, RSI, ATR } from "technicalindicators";
 import fetch from "node-fetch";
 
-// ---- Anti-block config (VERY IMPORTANT for GitHub runners)
-yahooFinance.setGlobalConfig({
-  headers: {
-    "User-Agent": "Mozilla/5.0"
-  }
-});
-
 console.log("🚀 Scanner started");
 
 const SYMBOLS = [
@@ -24,8 +17,7 @@ const SYMBOLS = [
 "UNIONBANK.NS","BANDHANBNK.NS","IDFCFIRSTB.NS","GAIL.NS","TATAPOWER.NS","TORNTPHARM.NS",
 "ABB.NS","SIEMENS.NS","MUTHOOTFIN.NS","BAJAJ-AUTO.NS","AMBUJACEM.NS","ACC.NS","BEL.NS",
 "HAL.NS","IRCTC.NS","POLYCAB.NS","ETERNAL.NS","NAUKRI.NS","ASHOKLEY.NS","TVSMOTOR.NS",
-"CHOLAFIN.NS","MGL.NS","IGL.NS","APOLLOHOSP.NS",
-"TMCV.NS"
+"CHOLAFIN.NS","MGL.NS","IGL.NS","APOLLOHOSP.NS","TMCV.NS"
 ];
 
 const INTERVAL = "5m";
@@ -49,12 +41,12 @@ function inMarket() {
   return !(h < 9 || h === 12 || h === 13 || h > 15 || (h === 15 && m > 30));
 }
 
-// Small retry helper
+// retry once
 async function fetchChart(sym, opts) {
   try {
     return await yahooFinance.chart(sym, opts);
   } catch {
-    await new Promise(r => setTimeout(r, 500));
+    await new Promise(r => setTimeout(r, 600));
     return await yahooFinance.chart(sym, opts);
   }
 }
@@ -74,7 +66,8 @@ async function scan() {
         interval: INTERVAL,
         period1: p1,
         period2: p2,
-        region: "IN"       // <--- critical fix
+        region: "IN",
+        headers: { "User-Agent": "Mozilla/5.0" }
       });
 
       const q = r?.quotes;
@@ -107,7 +100,7 @@ ATR%: ${atrPct.toFixed(2)}`;
       await sendTelegram(msg);
       console.log("✅ Alert:", sym);
 
-    } catch (e) {
+    } catch {
       console.log(`⚠️ ${sym} yahoo failed`);
     }
   }
