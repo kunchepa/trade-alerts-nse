@@ -1,6 +1,7 @@
 {
   "name": "trade-alerts-nse",
-  "version": "3.0.0",
+  "version": "3.1.0",
+  "private": true,
   "type": "module",
   "main": "src/index.js",
   "scripts": {
@@ -10,7 +11,7 @@
     "node": ">=22"
   },
   "dependencies": {
-    "yahoo-finance2": "^2.11.3",
+    "yahoo-finance2": "2.11.3",
     "technicalindicators": "^3.1.0",
     "google-spreadsheet": "^4.1.2",
     "node-fetch": "^3.3.2"
