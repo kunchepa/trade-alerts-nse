@@ -2,9 +2,9 @@
   "name": "trade-alerts-nse",
   "version": "1.0.0",
   "type": "module",
-  "main": "index.js",
+  "main": "src/index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node src/index.js"
   },
   "dependencies": {
     "yahoo-finance2": "2.11.0",
