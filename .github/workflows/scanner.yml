@@ -2,7 +2,11 @@ name: NSE Trade Scanner
 
 on:
   schedule:
-    - cron: "*/5 3-10 * * 1-5"
+    - cron: "*/5 * * * *"   # your internal GitHub cron
+
+  repository_dispatch:
+    types: [external_trigger]
+
   workflow_dispatch:
 
 jobs:
@@ -16,11 +20,8 @@ jobs:
         with:
           node-version: 22
 
-      - run: npm install --no-audit --no-fund
-
-      - run: npm start
+      - run: npm install
+      - run: node src/index.js
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
