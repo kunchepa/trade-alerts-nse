@@ -94,12 +94,13 @@ let sheet;
 async function initSheet() {
   const creds = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
 
-  const doc = new GoogleSpreadsheet(process.env.SPREADSHEET_ID);
-
-  await doc.useServiceAccountAuth({
-    client_email: creds.client_email,
-    private_key: creds.private_key
+  const jwt = new JWT({
+    email: creds.client_email,
+    key: creds.private_key,
+    scopes: ["https://www.googleapis.com/auth/spreadsheets"]
   });
+
+  const doc = new GoogleSpreadsheet(process.env.SPREADSHEET_ID, jwt);
 
   await doc.loadInfo();
 
