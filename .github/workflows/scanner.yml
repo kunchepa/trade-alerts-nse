@@ -1,27 +1,39 @@
-name: NSE Trade Scanner
+name: NSE Trade Scanner – 5min EMA Crossover
 
 on:
   schedule:
-    - cron: "*/5 * * * *"   # your internal GitHub cron
-
+    - cron: "*/5 * * * *"           # every 5 minutes (00:00–23:55)
+  workflow_dispatch:                # manual run button in GitHub Actions
   repository_dispatch:
-    types: [external_trigger]
-
-  workflow_dispatch:
+    types: [trigger-scan]           # optional – for external triggers
 
 jobs:
   scan:
     runs-on: ubuntu-latest
+    timeout-minutes: 10             # safety – prevent stuck jobs
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: '22'
+          cache: 'npm'                  # faster installs
 
-      - run: npm install
-      - run: node src/index.js
+      - name: Install dependencies
+        run: npm ci                     # cleaner & faster than npm install
+
+      - name: Run scanner
+        run: node src/index.js          # assuming your file is in src/index.js
         env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_BOT_TOKEN:         ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:           ${{ secrets.TELEGRAM_CHAT_ID }}
+          SPREADSHEET_ID:             ${{ secrets.SPREADSHEET_ID }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+
+      - name: Show logs if failed              # optional – easier debugging
+        if: failure()
+        run: echo "Last 20 lines of console output:"
+             && tail -n 20 $GITHUB_WORKSPACE/*.log || true
