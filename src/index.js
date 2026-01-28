@@ -1,6 +1,6 @@
 /**
  * trade-alerts-nse
- * REVISED VERSION
+ * REVISED VERSION – Fixed for GitHub Actions
  * Strategy: Fresh EMA Crossover + Cooldown
  */
 
@@ -9,30 +9,14 @@ import { EMA, RSI } from "technicalindicators";
 import fetch from "node-fetch";
 import { GoogleSpreadsheet } from "google-spreadsheet";
 
-/* =========================
-   YAHOO CLIENT
-========================= */
-
 const yahooFinance = new YahooFinance();
-
-/* =========================
-   CONFIG
-========================= */
 
 const SL_PCT = 0.7;
 const TARGET_PCT = 1.4;
 const MIN_CONFIDENCE = 60;
 const COOLDOWN_MINUTES = 30;
 
-/* =========================
-   ALERT MEMORY (IN-MEMORY)
-========================= */
-
-const alertedStocks = new Map(); // symbol → timestamp
-
-/* =========================
-   ENV VALIDATION
-========================= */
+const alertedStocks = new Map();
 
 const REQUIRED_ENV = [
   "TELEGRAM_BOT_TOKEN",
@@ -43,15 +27,12 @@ const REQUIRED_ENV = [
 
 for (const key of REQUIRED_ENV) {
   if (!process.env[key]) {
-    throw new Error(`❌ Missing env variable: ${key}`);
+    console.error(`❌ Missing env variable: ${key}`);
+    process.exit(1); // immediate stop if env missing
   }
 }
 
 console.log("✅ All environment variables loaded");
-
-/* =========================
-   SYMBOLS
-========================= */
 
 const SYMBOLS = [
   "RELIANCE.NS","TCS.NS","HDFCBANK.NS","INFY.NS","HDFC.NS","ICICIBANK.NS","KOTAKBANK.NS","LT.NS",
@@ -72,55 +53,57 @@ const SYMBOLS = [
 const INTERVAL = "5m";
 const LOOKBACK_DAYS = 5;
 
-/* =========================
-   HELPERS
-========================= */
-
 async function sendTelegram(message) {
-  await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      chat_id: process.env.TELEGRAM_CHAT_ID,
-      text: message,
-      parse_mode: "Markdown"
-    })
-  });
+  try {
+    await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: process.env.TELEGRAM_CHAT_ID,
+        text: message,
+        parse_mode: "Markdown"
+      })
+    });
+  } catch (err) {
+    console.error("Telegram send failed:", err.message);
+  }
 }
 
 async function logToSheet(row) {
-  const doc = new GoogleSpreadsheet(process.env.SPREADSHEET_ID);
-  await doc.useServiceAccountAuth(JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON));
-  await doc.loadInfo();
-  await doc.sheetsByTitle["Alerts"].addRow(row);
+  try {
+    const doc = new GoogleSpreadsheet(process.env.SPREADSHEET_ID);
+    await doc.useServiceAccountAuth(JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON));
+    await doc.loadInfo();
+    const sheet = doc.sheetsByTitle["Alerts"];
+    if (!sheet) {
+      console.error("Sheet 'Alerts' not found!");
+      return;
+    }
+    await sheet.addRow(row);
+  } catch (err) {
+    console.error("Google Sheet log failed:", err.message);
+  }
 }
-
-/* =========================
-   CONFIDENCE
-========================= */
 
 function calculateConfidence({ ema9, ema21, rsi }) {
   let score = 0;
-
   if (ema9 > ema21) score += 40;
   if (rsi > 55 && rsi < 70) score += 30;
   if (ema9 > ema21 && rsi > 50) score += 30;
-
   return Math.min(score, 100);
 }
 
-/* =========================
-   MAIN SCANNER
-========================= */
-
 async function runScanner() {
+  console.log("🚀 Scanner started at", new Date().toISOString());
+
   const period2 = Math.floor(Date.now() / 1000);
   const period1 = period2 - LOOKBACK_DAYS * 24 * 60 * 60;
   const now = Date.now();
 
+  let alertCount = 0;
+
   for (const symbol of SYMBOLS) {
     try {
-      // 🔒 Cooldown check
       const lastAlert = alertedStocks.get(symbol);
       if (lastAlert && now - lastAlert < COOLDOWN_MINUTES * 60 * 1000) {
         continue;
@@ -138,22 +121,15 @@ async function runScanner() {
       const closes = candles.map(c => c.close).filter(Boolean);
       if (closes.length < 40) continue;
 
-      // Current EMAs
       const ema9 = EMA.calculate({ period: 9, values: closes }).at(-1);
       const ema21 = EMA.calculate({ period: 21, values: closes }).at(-1);
-
-      // Previous EMAs (for crossover)
       const prevEma9 = EMA.calculate({ period: 9, values: closes.slice(0, -1) }).at(-1);
       const prevEma21 = EMA.calculate({ period: 21, values: closes.slice(0, -1) }).at(-1);
-
       const rsi = RSI.calculate({ period: 14, values: closes }).at(-1);
 
       if (!ema9 || !ema21 || !prevEma9 || !prevEma21 || !rsi) continue;
 
-      // ✅ Fresh crossover only
-      const freshCrossover =
-        prevEma9 <= prevEma21 && ema9 > ema21;
-
+      const freshCrossover = prevEma9 <= prevEma21 && ema9 > ema21;
       if (!freshCrossover || rsi <= 50) continue;
 
       const confidence = calculateConfidence({ ema9, ema21, rsi });
@@ -167,10 +143,8 @@ async function runScanner() {
 📈 *BUY SIGNAL*
 Stock: *${symbol}*
 Entry: ₹${entry.toFixed(2)}
-
 SL: ₹${sl.toFixed(2)}
 Target: ₹${target.toFixed(2)}
-
 Confidence: *${confidence}/100*
 `;
 
@@ -185,16 +159,19 @@ Confidence: *${confidence}/100*
       });
 
       alertedStocks.set(symbol, now);
-      console.log(`✅ Alert sent for ${symbol}`);
+      alertCount++;
+      console.log(`✅ Alert sent: ${symbol} (Confidence: ${confidence})`);
 
     } catch (err) {
-      console.error(`❌ ${symbol}:`, err.message);
+      console.error(`❌ ${symbol}: ${err.message}`);
     }
   }
+
+  console.log(`🏁 Scanner completed. Alerts sent: ${alertCount}`);
 }
 
-/* =========================
-   START
-========================= */
-
-await runScanner();
+// ✅ NO TOP-LEVEL AWAIT — Safe for GitHub Actions
+runScanner().catch(err => {
+  console.error("Scanner crashed:", err);
+  process.exit(1);
+});
