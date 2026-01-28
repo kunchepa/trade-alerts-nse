@@ -1,7 +1,9 @@
 {
   "name": "trade-alerts-nse",
   "version": "3.0.0",
+  "description": "NSE 5-min fresh EMA crossover scanner with Telegram & Google Sheets",
   "type": "module",
+  "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js"
   },
@@ -9,10 +11,11 @@
     "node": ">=22"
   },
   "dependencies": {
-    "yahoo-finance2": "^3.11.2",
+    "yahoo-finance2": "^2.11.3",          // safer & more tested version for many users
     "technicalindicators": "^3.1.0",
     "google-spreadsheet": "^4.1.2",
-    "google-auth-library": "^9.0.0",
     "node-fetch": "^3.3.2"
-  }
+  },
+  "author": "techy",
+  "license": "ISC"
 }
