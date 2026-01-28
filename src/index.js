@@ -2,6 +2,13 @@ import yahooFinance from "yahoo-finance2";
 import { EMA, RSI, ATR } from "technicalindicators";
 import fetch from "node-fetch";
 
+// ---- Anti-block config (VERY IMPORTANT for GitHub runners)
+yahooFinance.setGlobalConfig({
+  headers: {
+    "User-Agent": "Mozilla/5.0"
+  }
+});
+
 console.log("🚀 Scanner started");
 
 const SYMBOLS = [
@@ -18,11 +25,8 @@ const SYMBOLS = [
 "ABB.NS","SIEMENS.NS","MUTHOOTFIN.NS","BAJAJ-AUTO.NS","AMBUJACEM.NS","ACC.NS","BEL.NS",
 "HAL.NS","IRCTC.NS","POLYCAB.NS","ETERNAL.NS","NAUKRI.NS","ASHOKLEY.NS","TVSMOTOR.NS",
 "CHOLAFIN.NS","MGL.NS","IGL.NS","APOLLOHOSP.NS",
-
-// custom replacements
 "TMCV.NS"
 ];
-
 
 const INTERVAL = "5m";
 const LOOKBACK_DAYS = 5;
@@ -42,8 +46,17 @@ function inMarket() {
   const ist = new Date(Date.now() + 19800000);
   const h = ist.getHours();
   const m = ist.getMinutes();
+  return !(h < 9 || h === 12 || h === 13 || h > 15 || (h === 15 && m > 30));
+}
 
-  return !(h < 9 || (h === 12) || (h === 13) || h > 15 || (h === 15 && m > 30));
+// Small retry helper
+async function fetchChart(sym, opts) {
+  try {
+    return await yahooFinance.chart(sym, opts);
+  } catch {
+    await new Promise(r => setTimeout(r, 500));
+    return await yahooFinance.chart(sym, opts);
+  }
 }
 
 async function scan() {
@@ -57,9 +70,14 @@ async function scan() {
 
   for (const sym of SYMBOLS) {
     try {
-      const r = await yahooFinance.chart(sym, { interval: INTERVAL, period1: p1, period2: p2 });
-      const q = r.quotes;
+      const r = await fetchChart(sym, {
+        interval: INTERVAL,
+        period1: p1,
+        period2: p2,
+        region: "IN"       // <--- critical fix
+      });
 
+      const q = r?.quotes;
       if (!q || q.length < 60) continue;
 
       const close = q.map(x => x.close);
@@ -73,7 +91,6 @@ async function scan() {
       const atr = ATR.calculate({ period: 14, high, low, close }).at(-1);
 
       if (!ema9 || !ema21 || !ema50 || !rsi || !atr) continue;
-
       if (ema9 <= ema21) continue;
       if (close.at(-1) < ema50) continue;
       if (rsi > 72 || rsi < 50) continue;
@@ -81,11 +98,16 @@ async function scan() {
       const atrPct = atr / close.at(-1) * 100;
       if (atrPct > 3) continue;
 
-      const msg = `📈 BUY ${sym}\nPrice: ${close.at(-1).toFixed(2)}\nRSI: ${rsi.toFixed(1)}\nATR%: ${atrPct.toFixed(2)}`;
-      await sendTelegram(msg);
+      const msg =
+`📈 BUY ${sym}
+Price: ${close.at(-1).toFixed(2)}
+RSI: ${rsi.toFixed(1)}
+ATR%: ${atrPct.toFixed(2)}`;
 
+      await sendTelegram(msg);
       console.log("✅ Alert:", sym);
-    } catch {
+
+    } catch (e) {
       console.log(`⚠️ ${sym} yahoo failed`);
     }
   }
