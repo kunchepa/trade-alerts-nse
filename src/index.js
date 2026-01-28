@@ -1,30 +1,22 @@
 /**
- * NSE 5-Min EMA Crossover Scanner
- * Stable Production Version for GitHub Actions
+ * NSE 5-Min EMA Scanner – Google Sheets Aligned Version
  */
 
-import YahooFinance from "yahoo-finance2";
+import yahooFinance from "yahoo-finance2";
 import { EMA, RSI } from "technicalindicators";
 import fetch from "node-fetch";
 import { GoogleSpreadsheet } from "google-spreadsheet";
-
-const yahooFinance = new YahooFinance();
 
 // ================= CONFIG =================
 
 const SL_PCT = 0.7;
 const TARGET_PCT = 1.4;
 const MIN_CONFIDENCE = 60;
-const COOLDOWN_MINUTES = 30;
 
 const INTERVAL = "5m";
 const LOOKBACK_DAYS = 5;
 
 // ========================================
-
-const alertedStocks = new Map();
-
-// -------- ENV CHECK --------
 
 const REQUIRED_ENV = [
   "TELEGRAM_BOT_TOKEN",
@@ -33,117 +25,106 @@ const REQUIRED_ENV = [
   "GOOGLE_SERVICE_ACCOUNT_JSON"
 ];
 
-for (const key of REQUIRED_ENV) {
-  if (!process.env[key]) {
-    console.error(`❌ Missing env variable: ${key}`);
+for (const k of REQUIRED_ENV) {
+  if (!process.env[k]) {
+    console.error(`❌ Missing env: ${k}`);
     process.exit(1);
   }
 }
 
 console.log("✅ Environment variables loaded");
 
-// -------- SYMBOLS --------
+// ===== NSE TOP STOCKS =====
 
 const SYMBOLS = [
-  "RELIANCE.NS", "HDFCBANK.NS", "BHARTIARTL.NS", "TCS.NS", "ICICIBANK.NS", "SBIN.NS", "INFY.NS",
-  "BAJFINANCE.NS", "HINDUNILVR.NS", "LT.NS", "LICI.NS", "MARUTI.NS", "HCLTECH.NS", "M&M.NS",
-  "AXISBANK.NS", "KOTAKBANK.NS", "ITC.NS", "SUNPHARMA.NS", "ULTRACEMCO.NS", "TITAN.NS",
-  "NTPC.NS", "ADANIPORTS.NS", "ONGC.NS", "HINDZINC.NS", "BAJAJFINSV.NS", "BEL.NS", "JSWSTEEL.NS",
-  "HAL.NS", "VEDL.NS", "BAJAJ-AUTO.NS", "COALINDIA.NS", "ADANIPOWER.NS", "ADANIENT.NS",
-  "ASIANPAINT.NS", "NESTLEIND.NS", "WIPRO.NS", "ZOMATO.NS", "TATASTEEL.NS", "DMART.NS",
-  "POWERGRID.NS", "IOC.NS", "HINDALCO.NS", "SBILIFE.NS", "EICHERMOT.NS", "GRASIM.NS",
-  "SHRIRAMFIN.NS", "INDIGO.NS", "LTIM.NS", "TECHM.NS", "TVSMOTOR.NS",
-  "JIOFIN.NS", "DIVISLAB.NS", "VBL.NS", "BANKBARODA.NS", "HDFCLIFE.NS", "BPCL.NS", "DLF.NS",
-  "IRFC.NS", "PIDILITIND.NS", "BRITANNIA.NS", "PNB.NS", "CANBK.NS", "CHOLAFIN.NS",
-  "TORNTPHARM.NS", "TRENT.NS", "ADANIGREEN.NS", "AMBUJACEM.NS", "TATAMOTORS.NS",
-  "GODREJCP.NS", "PFC.NS", "APOLLOHOSP.NS", "CIPLA.NS", "GAIL.NS", "BOSCHLTD.NS",
-  "DRREDDY.NS", "SIEMENS.NS", "SHREECEM.NS", "MAXHEALTH.NS", "ZYDUSLIFE.NS", "HAVELLS.NS",
-  "JSWENERGY.NS", "POLYCAB.NS", "NAUKRI.NS", "PAYTM.NS", "MUTHOOTFIN.NS", "PEL.NS",
-  "ACC.NS", "ASHOKLEY.NS", "MFSL.NS", "DABUR.NS", "EMAMILTD.NS", "IGL.NS", "LUPIN.NS",
-  "BIOCON.NS", "FORTIS.NS", "ABB.NS", "TATACONSUM.NS", "UPL.NS", "UNIONBANK.NS", "IDFCFIRSTB.NS",
-  "BANDHANBNK.NS", "TATAPOWER.NS", "HEROMOTOCO.NS"
+"RELIANCE.NS","TCS.NS","HDFCBANK.NS","INFY.NS","ICICIBANK.NS","SBIN.NS",
+"BHARTIARTL.NS","ITC.NS","LT.NS","BAJFINANCE.NS","HINDUNILVR.NS","MARUTI.NS",
+"AXISBANK.NS","KOTAKBANK.NS","SUNPHARMA.NS","TITAN.NS","NTPC.NS","ONGC.NS",
+"POWERGRID.NS","ADANIPORTS.NS","JSWSTEEL.NS","WIPRO.NS","TECHM.NS","HCLTECH.NS",
+"TATASTEEL.NS","COALINDIA.NS","ULTRACEMCO.NS","BAJAJFINSV.NS","NESTLEIND.NS",
+"ASIANPAINT.NS","BPCL.NS","GRASIM.NS","DIVISLAB.NS","ADANIENT.NS","BEL.NS",
+"HAL.NS","IOC.NS","HINDALCO.NS","SBILIFE.NS","EICHERMOT.NS","DLF.NS",
+"PIDILITIND.NS","BRITANNIA.NS","PNB.NS","CANBK.NS","TATAPOWER.NS",
+"HEROMOTOCO.NS","GAIL.NS","DRREDDY.NS","SIEMENS.NS","SHREECEM.NS",
+"MAXHEALTH.NS","ZYDUSLIFE.NS","HAVELLS.NS","POLYCAB.NS","NAUKRI.NS",
+"PAYTM.NS","MUTHOOTFIN.NS","ACC.NS","ASHOKLEY.NS","DABUR.NS","LUPIN.NS",
+"BIOCON.NS","ABB.NS","TATACONSUM.NS","UPL.NS","UNIONBANK.NS","IDFCFIRSTB.NS"
 ];
 
-// ========================================
+// ================= HELPERS =================
 
-async function fetchWithRetry(symbol, options, retries = 2) {
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+function istTime() {
+  return new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
+}
+
+async function fetchWithRetry(symbol, opts, retries = 2) {
   for (let i = 0; i <= retries; i++) {
     try {
-      return await yahooFinance.chart(symbol, options);
-    } catch (err) {
-      if (i === retries) throw err;
+      return await yahooFinance.chart(symbol, opts);
+    } catch (e) {
+      if (i === retries) throw e;
       console.log(`⏳ Retry ${i + 1} for ${symbol}`);
-      await new Promise(r => setTimeout(r, 1500));
+      await sleep(1500);
     }
   }
 }
 
-async function sendTelegram(message) {
-  try {
-    await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: process.env.TELEGRAM_CHAT_ID,
-        text: message,
-        parse_mode: "Markdown"
-      })
-    });
-  } catch (err) {
-    console.error("Telegram failed:", err.message);
-  }
+// ================= TELEGRAM =================
+
+async function sendTelegram(msg) {
+  await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chat_id: process.env.TELEGRAM_CHAT_ID,
+      text: msg
+    })
+  });
 }
 
-async function logToSheet(row) {
-  try {
-    const doc = new GoogleSpreadsheet(process.env.SPREADSHEET_ID);
-    await doc.useServiceAccountAuth(JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON));
-    await doc.loadInfo();
+// ================= GOOGLE SHEETS =================
 
-    const sheet = doc.sheetsByTitle["Alerts"];
-    if (!sheet) return console.error("Sheet 'Alerts' not found");
+let sheet;
 
-    await sheet.addRow(row);
-  } catch (err) {
-    console.error("Sheets failed:", err.message);
-  }
+async function initSheet() {
+  const doc = new GoogleSpreadsheet(process.env.SPREADSHEET_ID);
+  await doc.useServiceAccountAuth(JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON));
+  await doc.loadInfo();
+  sheet = doc.sheetsByTitle["Alerts"];
 }
 
-function calculateConfidence({ ema9, ema21, rsi }) {
-  let score = 0;
-  if (ema9 > ema21) score += 40;
-  if (rsi > 55 && rsi < 70) score += 30;
-  if (ema9 > ema21 && rsi > 50) score += 30;
-  return Math.min(score, 100);
+// ================= CONFIDENCE =================
+
+function confidence(ema9, ema21, rsi) {
+  let s = 0;
+  if (ema9 > ema21) s += 40;
+  if (rsi > 55 && rsi < 70) s += 30;
+  if (rsi > 50) s += 30;
+  return s;
 }
 
-// ========================================
+// ================= MAIN =================
 
-async function runScanner() {
-  console.log("🚀 Scanner started:", new Date().toISOString());
+async function run() {
+  console.log("🚀 Scanner started");
 
-  const period2 = Math.floor(Date.now() / 1000);
-  const period1 = period2 - LOOKBACK_DAYS * 24 * 60 * 60;
-  const now = Date.now();
+  await initSheet();
+
+  const p2 = Math.floor(Date.now() / 1000);
+  const p1 = p2 - LOOKBACK_DAYS * 86400;
 
   let alerts = 0;
 
-  for (const symbol of SYMBOLS) {
+  for (const s of SYMBOLS) {
     try {
-      const last = alertedStocks.get(symbol);
-      if (last && now - last < COOLDOWN_MINUTES * 60 * 1000) continue;
+      const r = await fetchWithRetry(s, { interval: INTERVAL, period1: p1, period2: p2 });
 
-      const result = await fetchWithRetry(symbol, {
-        interval: INTERVAL,
-        period1,
-        period2
-      });
-
-      const candles = result?.quotes;
+      const candles = r?.quotes;
       if (!candles || candles.length < 40) continue;
 
       const closes = candles.map(c => c.close).filter(Boolean);
-      if (closes.length < 40) continue;
 
       const ema9 = EMA.calculate({ period: 9, values: closes }).at(-1);
       const ema21 = EMA.calculate({ period: 21, values: closes }).at(-1);
@@ -151,51 +132,43 @@ async function runScanner() {
       const prev21 = EMA.calculate({ period: 21, values: closes.slice(0, -1) }).at(-1);
       const rsi = RSI.calculate({ period: 14, values: closes }).at(-1);
 
-      if (!ema9 || !ema21 || !prev9 || !prev21 || !rsi) continue;
+      if (!(prev9 <= prev21 && ema9 > ema21 && rsi > 50)) continue;
 
-      const fresh = prev9 <= prev21 && ema9 > ema21;
-      if (!fresh || rsi <= 50) continue;
-
-      const confidence = calculateConfidence({ ema9, ema21, rsi });
-      if (confidence < MIN_CONFIDENCE) continue;
+      const conf = confidence(ema9, ema21, rsi);
+      if (conf < MIN_CONFIDENCE) continue;
 
       const entry = closes.at(-1);
       const sl = entry * (1 - SL_PCT / 100);
-      const target = entry * (1 + TARGET_PCT / 100);
+      const tgt = entry * (1 + TARGET_PCT / 100);
 
-      const msg = `
-📈 *BUY SIGNAL*
-${symbol}
-Entry: ₹${entry.toFixed(2)}
-SL: ₹${sl.toFixed(2)}
-Target: ₹${target.toFixed(2)}
-Confidence: ${confidence}/100
-`;
+      await sendTelegram(`BUY ${s}\nEntry ${entry.toFixed(2)}\nSL ${sl.toFixed(2)}\nTarget ${tgt.toFixed(2)}`);
 
-      await sendTelegram(msg);
-      await logToSheet({
-        Symbol: symbol,
-        Entry: entry,
-        SL: sl,
-        Target: target,
-        Confidence: confidence,
-        Time: new Date().toISOString()
+      await sheet.addRow({
+        TimeIST: istTime(),
+        Symbol: s,
+        Direction: "BUY",
+        EntryPrice: entry,
+        Target: tgt,
+        StopLoss: sl,
+        Plus2Check: "PENDING",
+        Confidence: conf,
+        RawTimeUTC: new Date().toISOString()
       });
 
-      alertedStocks.set(symbol, now);
       alerts++;
+      console.log(`✅ ${s}`);
 
-      console.log(`✅ ${symbol} alerted`);
+      await sleep(400);
 
-    } catch (err) {
-      console.error(`❌ ${symbol}:`, err.message);
+    } catch (e) {
+      console.error(`❌ ${s}`, e.message);
     }
   }
 
-  console.log(`🏁 Completed. Alerts: ${alerts}`);
+  console.log(`🏁 Done. Alerts: ${alerts}`);
 }
 
-runScanner().catch(err => {
-  console.error("Scanner crashed:", err);
+run().catch(e => {
+  console.error("Fatal:", e);
   process.exit(1);
 });
