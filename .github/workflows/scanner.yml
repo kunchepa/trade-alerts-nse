@@ -2,9 +2,9 @@ name: NSE Trade Scanner – 5min EMA
 
 on:
   schedule:
-    - cron: "*/5 3-11 * * 1-5"   # IST 8:30–16:30
+    - cron: "*/5 3-11 * * 1-5"   # IST 8:30–16:30 (market hours + buffer)
 
-  workflow_dispatch:
+  workflow_dispatch:             # Manual trigger option
 
   repository_dispatch:
     types: [external_trigger]
@@ -12,7 +12,11 @@ on:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15          # Increased slightly to handle cooldown logic
+
+    concurrency:
+      group: nse-scanner-job
+      cancel-in-progress: true   # Overlapping runs cancel చేస్తుంది
 
     steps:
       - name: Checkout repo
@@ -32,7 +36,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-        run: node src/index.js
+        run: node index.js           # ఒకవేళ src/index.js అయితే node src/index.js
 
       - name: Scanner finished
         run: echo "Scanner job completed at $(date -u)"
