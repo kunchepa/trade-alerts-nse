@@ -1,6 +1,6 @@
 /**
- * NSE 5-Min EMA Scanner – minimal patch version
- * (ONLY sheets auth + yahoo chart fixed)
+ * NSE 5-Min EMA Scanner – fixed for rate limit + latest symbols
+ * (ONLY sheets auth + yahoo chart fixed + delays)
  */
 
 import yahooFinance from "yahoo-finance2";
@@ -8,6 +8,7 @@ import { EMA, RSI } from "technicalindicators";
 import fetch from "node-fetch";
 import { GoogleSpreadsheet } from "google-spreadsheet";
 import { JWT } from "google-auth-library";
+import { randomInt } from 'crypto';  // for random delays
 
 // ================= CONFIG =================
 
@@ -36,14 +37,15 @@ for (const k of REQUIRED_ENV) {
 
 console.log("✅ Environment variables loaded");
 
-// ===== YOUR EXISTING SYMBOL LIST (unchanged) =====
+// ===== UPDATED SYMBOLS: Latest top Nifty 50 + active ones (Jan 2026) =====
 
 const SYMBOLS = [
   "RELIANCE.NS", "HDFCBANK.NS", "TCS.NS", "ICICIBANK.NS", "BHARTIARTL.NS",
   "INFY.NS", "SBIN.NS", "ITC.NS", "HINDUNILVR.NS", "LT.NS",
   "BAJFINANCE.NS", "AXISBANK.NS", "KOTAKBANK.NS", "SUNPHARMA.NS", "MARUTI.NS",
   "TITAN.NS", "NTPC.NS", "ONGC.NS", "POWERGRID.NS", "BEL.NS",
-  "HAL.NS", "COALINDIA.NS", "ADANIPORTS.NS", "HINDALCO.NS"  // recent active/gainers లో ఉన్నవి
+  "COALINDIA.NS", "HINDALCO.NS", "ADANIPORTS.NS", "ADANIENT.NS", "ULTRACEMCO.NS"
+  // Removed low-volume ones, focused on top/active to reduce rate limit hits
 ];
 
 // ================= HELPERS =================
@@ -54,15 +56,30 @@ function istTime() {
   return new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
 }
 
-// yahoo-finance2 FIX: use _chart
-async function fetchWithRetry(symbol, opts, retries = 2) {
+// yahoo-finance2 FIX: delays + UA + retry logic
+async function fetchWithRetry(symbol, opts, retries = 3) {
   for (let i = 0; i <= retries; i++) {
     try {
-      return await yahooFinance.chart(symbol, opts);
+      // Random delay before request (4-10 sec)
+      await sleep(randomInt(4000, 10000));
+
+      const customOpts = {
+        ...opts,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36'
+        }
+      };
+
+      return await yahooFinance.chart(symbol, customOpts);
     } catch (e) {
+      const errStr = String(e);
+      if (errStr.includes('Too Many Requests') || errStr.includes('rate limit')) {
+        console.log(`🚫 Rate limited on ${symbol} - extra long wait`);
+        await sleep(15000 + randomInt(10000, 20000));  // 15-35 sec
+      }
       if (i === retries) throw e;
-      console.log(`⏳ Retry ${i + 1} for ${symbol}`);
-      await sleep(1500);
+      console.log(`⏳ Retry ${i + 1}/${retries} for ${symbol}`);
+      await sleep(8000 + randomInt(3000, 7000));
     }
   }
 }
@@ -102,8 +119,6 @@ async function initSheet() {
 
   console.log("✅ Google Sheet connected");
 }
-
-
 
 // ================= CONFIDENCE =================
 
@@ -155,9 +170,8 @@ async function run() {
       const sl = entry * (1 - SL_PCT / 100);
       const tgt = entry * (1 + TARGET_PCT / 100);
 
-      await sendTelegram(
-        `BUY ${s}\nEntry ${entry.toFixed(2)}\nSL ${sl.toFixed(2)}\nTarget ${tgt.toFixed(2)}`
-      );
+      const msg = `BUY ${s}\nEntry ${entry.toFixed(2)}\nSL ${sl.toFixed(2)}\nTarget ${tgt.toFixed(2)}\nConfidence: ${conf}%`;
+      await sendTelegram(msg);
 
       await sheet.addRow({
         TimeIST: istTime(),
@@ -172,12 +186,14 @@ async function run() {
       });
 
       alerts++;
-      console.log(`✅ ${s}`);
+      console.log(`✅ ${s} - Alert sent!`);
 
-      await sleep(400);
+      // Long sleep after each alert/symbol
+      await sleep(12000 + randomInt(3000, 8000));  // 12-20 sec
 
     } catch (e) {
       console.error(`❌ ${s}`, e.message);
+      await sleep(10000);  // even on error, wait
     }
   }
 
