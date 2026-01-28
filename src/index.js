@@ -3,7 +3,7 @@
  * (ONLY sheets auth + yahoo chart fixed)
  */
 
-import * as yahooFinance from "yahoo-finance2";
+import yahooFinance from "yahoo-finance2";
 import { EMA, RSI } from "technicalindicators";
 import fetch from "node-fetch";
 import { GoogleSpreadsheet } from "google-spreadsheet";
