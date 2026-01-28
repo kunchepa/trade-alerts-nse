@@ -110,6 +110,7 @@ async function initSheet() {
 }
 
 
+
 // ================= CONFIDENCE =================
 
 function confidence(ema9, ema21, rsi) {
