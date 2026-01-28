@@ -1,16 +1,13 @@
 name: NSE Trade Scanner – 5min EMA
 
 on:
-  # ⏰ Every 5 mins during NSE hours (09:30–15:30 IST)
-  # GitHub uses UTC → 04:00–10:00 UTC ≈ 09:30–15:30 IST
   schedule:
-    - cron: "*/5 4-10 * * 1-5"
+    - cron: "*/5 3-11 * * 1-5"   # IST 8:30–16:30
 
-  # Manual trigger from Actions tab
   workflow_dispatch:
 
-  # External trigger (repository_dispatch API)
   repository_dispatch:
+    types: [external_trigger]
 
 jobs:
   scan:
@@ -29,14 +26,13 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Run EMA Scanner
-        run: node src/index.js
+      - name: Run scanner
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: node src/index.js
 
-      - name: Job finished
-        if: always()
+      - name: Scanner finished
         run: echo "Scanner job completed at $(date -u)"
