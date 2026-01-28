@@ -65,7 +65,7 @@ function istTime() {
 async function fetchWithRetry(symbol, opts, retries = 2) {
   for (let i = 0; i <= retries; i++) {
     try {
-      return await yahooFinance._chart(symbol, opts);
+      return await yahooFinance.chart(symbol, opts);
     } catch (e) {
       if (i === retries) throw e;
       console.log(`⏳ Retry ${i + 1} for ${symbol}`);
