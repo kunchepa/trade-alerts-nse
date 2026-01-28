@@ -7,7 +7,7 @@
     "start": "node src/index.js"
   },
   "dependencies": {
-    "google-spreadsheet": "^4.1.2",
+    "google-spreadsheet": "4.1.2",
     "google-auth-library": "^9.0.0",
     "technicalindicators": "^3.1.0",
     "yahoo-finance2": "^2.13.3",
