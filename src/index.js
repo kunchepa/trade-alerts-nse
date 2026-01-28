@@ -4,16 +4,10 @@
  * Strategy: Fresh EMA Crossover + Cooldown
  */
 
-import YahooFinance from "yahoo-finance2";
+import yahooFinance from "yahoo-finance2";   // ← ఇక్కడ చిన్న 'y' మాత్రమే
 import { EMA, RSI } from "technicalindicators";
 import fetch from "node-fetch";
 import { GoogleSpreadsheet } from "google-spreadsheet";
-
-/* =========================
-   YAHOO CLIENT
-========================= */
-
-const yahooFinance = new YahooFinance();
 
 /* =========================
    CONFIG
@@ -120,13 +114,13 @@ async function runScanner() {
 
   for (const symbol of SYMBOLS) {
     try {
-      // 🔒 Cooldown check
+      // Cooldown check
       const lastAlert = alertedStocks.get(symbol);
       if (lastAlert && now - lastAlert < COOLDOWN_MINUTES * 60 * 1000) {
         continue;
       }
 
-      const result = await yahooFinance.chart(symbol, {
+      const result = await yahooFinance.chart(symbol, {   // ← ఇక్కడ yahooFinance (small y)
         interval: INTERVAL,
         period1,
         period2
@@ -150,9 +144,8 @@ async function runScanner() {
 
       if (!ema9 || !ema21 || !prevEma9 || !prevEma21 || !rsi) continue;
 
-      // ✅ Fresh crossover only
-      const freshCrossover =
-        prevEma9 <= prevEma21 && ema9 > ema21;
+      // Fresh crossover only
+      const freshCrossover = prevEma9 <= prevEma21 && ema9 > ema21;
 
       if (!freshCrossover || rsi <= 50) continue;
 
