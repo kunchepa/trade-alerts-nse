@@ -1,11 +1,13 @@
 /**
- * NSE 5-Min EMA Scanner – Google Sheets Aligned Version
+ * NSE 5-Min EMA Scanner – minimal patch version
+ * (ONLY sheets auth + yahoo chart fixed)
  */
 
 import yahooFinance from "yahoo-finance2";
 import { EMA, RSI } from "technicalindicators";
 import fetch from "node-fetch";
 import { GoogleSpreadsheet } from "google-spreadsheet";
+import { JWT } from "google-auth-library";
 
 // ================= CONFIG =================
 
@@ -34,7 +36,7 @@ for (const k of REQUIRED_ENV) {
 
 console.log("✅ Environment variables loaded");
 
-// ===== NSE TOP STOCKS =====
+// ===== YOUR EXISTING SYMBOL LIST (unchanged) =====
 
 const SYMBOLS = [
 "RELIANCE.NS","TCS.NS","HDFCBANK.NS","INFY.NS","ICICIBANK.NS","SBIN.NS",
@@ -59,10 +61,11 @@ function istTime() {
   return new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
 }
 
+// yahoo-finance2 FIX: use _chart
 async function fetchWithRetry(symbol, opts, retries = 2) {
   for (let i = 0; i <= retries; i++) {
     try {
-      return await yahooFinance.chart(symbol, opts);
+      return await yahooFinance._chart(symbol, opts);
     } catch (e) {
       if (i === retries) throw e;
       console.log(`⏳ Retry ${i + 1} for ${symbol}`);
@@ -89,10 +92,23 @@ async function sendTelegram(msg) {
 let sheet;
 
 async function initSheet() {
+  const creds = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
+
+  // google-spreadsheet v4 FIX
+  const jwt = new JWT({
+    email: creds.client_email,
+    key: creds.private_key,
+    scopes: ["https://www.googleapis.com/auth/spreadsheets"]
+  });
+
   const doc = new GoogleSpreadsheet(process.env.SPREADSHEET_ID);
-  await doc.useServiceAccountAuth(JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON));
+  await doc.useOAuth2Client(jwt);
   await doc.loadInfo();
+
   sheet = doc.sheetsByTitle["Alerts"];
+  if (!sheet) throw new Error("Alerts sheet not found");
+
+  console.log("✅ Google Sheet connected");
 }
 
 // ================= CONFIDENCE =================
@@ -119,7 +135,11 @@ async function run() {
 
   for (const s of SYMBOLS) {
     try {
-      const r = await fetchWithRetry(s, { interval: INTERVAL, period1: p1, period2: p2 });
+      const r = await fetchWithRetry(s, {
+        interval: INTERVAL,
+        period1: p1,
+        period2: p2
+      });
 
       const candles = r?.quotes;
       if (!candles || candles.length < 40) continue;
@@ -141,7 +161,9 @@ async function run() {
       const sl = entry * (1 - SL_PCT / 100);
       const tgt = entry * (1 + TARGET_PCT / 100);
 
-      await sendTelegram(`BUY ${s}\nEntry ${entry.toFixed(2)}\nSL ${sl.toFixed(2)}\nTarget ${tgt.toFixed(2)}`);
+      await sendTelegram(
+        `BUY ${s}\nEntry ${entry.toFixed(2)}\nSL ${sl.toFixed(2)}\nTarget ${tgt.toFixed(2)}`
+      );
 
       await sheet.addRow({
         TimeIST: istTime(),
