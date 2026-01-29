@@ -1,42 +1,26 @@
-name: NSE Trade Scanner – 5min EMA
+name: NSE Scanner
 
 on:
   schedule:
-    - cron: "*/5 3-11 * * 1-5"   # IST 8:30–16:30 (market hours)
-
-  workflow_dispatch:             # Manual trigger
-
-  repository_dispatch:
-    types: [external_trigger]
+    - cron: "*/5 4-10 * * 1-5"
+  workflow_dispatch:
 
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-
-    concurrency:
-      group: nse-scanner-job
-      cancel-in-progress: true
 
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 20
 
-      - name: Install dependencies
-        run: npm install
+      - run: npm install
 
-      - name: Run scanner
+      - run: node src/index.js
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-        run: node src/index.js
-
-      - name: Scanner finished
-        run: echo "Scanner job completed at $(date -u)"
