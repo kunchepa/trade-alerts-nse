@@ -2,15 +2,15 @@ name: NSE Scanner
 
 on:
   schedule:
-    - cron: "*/5 4-10 * * 1-5"  # Every 5 min, Mon-Fri, ~4-10 AM UTC ≈ NSE market hours IST
-  workflow_dispatch:           # Manual trigger from GitHub UI
+    - cron: "*/5 4-10 * * 1-5"  # Mon-Fri, ~4-10 AM UTC ≈ NSE hours IST
+  workflow_dispatch:           # Manual run from GitHub UI
   repository_dispatch:
     types: [external_trigger]
 
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 30        # Prevent infinite hang (optional safety)
+    timeout-minutes: 30        # Safety: max 30 min run
 
     steps:
       - name: Checkout repository
@@ -19,8 +19,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22         # Recommended for yahoo-finance2 v3+
-          cache: 'npm'             # Cache node_modules for faster runs
+          node-version: 22         # No warning, yahoo-finance2 happy
 
       - name: Install dependencies
         run: npm install
