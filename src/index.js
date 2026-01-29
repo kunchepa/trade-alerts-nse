@@ -1,5 +1,7 @@
 /**
- * NSE EMA Scanner – FINAL REVISED VERSION (No new files, debug for Sheets)
+ * NSE EMA Scanner – FINAL POLISHED VERSION
+ * Sheets: TimeIST & RawTimeUTC added
+ * Telegram: Attractive & insightful format
  */
 
 import fetch from "node-fetch";
@@ -197,11 +199,32 @@ async function run() {
       const sl     = entry * (1 - SL_PCT / 100);
       const target = entry * (1 + TARGET_PCT / 100);
 
-      const msg = `📈 BUY SIGNAL\n\n**${plainSym}**\nEntry: ${entry.toFixed(2)}\nSL: ${sl.toFixed(2)}\nTarget: ${target.toFixed(2)}\nConfidence: ${conf}/100`;
+      // Improved Telegram message
+      const riskReward = ((target - entry) / (entry - sl)).toFixed(2);
+      const msg = `
+📈 *BUY SIGNAL ALERT* 📈
+
+**${plainSym}**  
+Current Price: *${entry.toFixed(2)}*  
+
+🎯 Target: *${target.toFixed(2)}*  
+🛑 Stop Loss: *${sl.toFixed(2)}*  
+
+Risk:Reward Ratio → **1 : ${riskReward}**  
+Confidence Level: **${conf}/100** 🔥  
+
+Signal Reason: EMA9 crossed above EMA21 + RSI showing bullish momentum  
+
+Time (IST): ${new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "short", timeStyle: "short" })}
+
+⚠️ Trade at your own risk – Not financial advice!
+      `.trim();
 
       await sendTelegram(msg);
 
+      // Updated row for Google Sheet (A & I columns fill avuthayi)
       await logToSheet({
+        TimeIST: new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "short", timeStyle: "short" }),
         Symbol: plainSym,
         Direction: "BUY",
         EntryPrice: entry,
@@ -209,7 +232,7 @@ async function run() {
         StopLoss: sl,
         Plus2Check: "PENDING",
         Confidence: conf,
-        Time: new Date().toISOString()
+        RawTimeUTC: new Date().toISOString()
       });
 
       console.log(`Alert sent: ${plainSym} (Conf ${conf})`);
