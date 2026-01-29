@@ -1,17 +1,18 @@
 /**
- * NSE EMA Scanner – PRODUCTION VERSION
+ * NSE EMA Scanner – FIXED PRODUCTION VERSION (Yahoo Finance Backend)
  */
 
 import fetch from "node-fetch";
 import { EMA, RSI } from "technicalindicators";
 import { GoogleSpreadsheet } from "google-spreadsheet";
+import yahooFinance from "yahoo-finance2";  // NEW: Reliable free source for NSE data
 
 /* ================= CONFIG ================= */
 
 const SL_PCT = 0.7;
 const TARGET_PCT = 1.4;
 const MIN_CONFIDENCE = 60;
-const DELAY_MS = 1200;
+const DELAY_MS = 2000;  // Increased for safety (Yahoo allows ~2000 calls/hour free)
 const COOLDOWN_MINUTES = 30;
 
 /* ================= SYMBOLS ================= */
@@ -30,8 +31,7 @@ const SYMBOLS = [
   "HAL","IRCTC","PAYTM","POLYCAB","ETERNAL","NAUKRI","BOSCHLTD","ASHOKLEY","TMCV",
   "TVSMOTOR","MFSL","CHOLAFIN","INDIGO","DABUR","EMAMILTD","MGL","IGL",
   "LUPIN","BIOCON","APOLLOHOSP","MAXHEALTH","FORTIS"
-];
-
+].map(sym => `${sym}.NS`);  // Add .NS suffix for Yahoo Finance NSE
 
 /* ================= ENV ================= */
 
@@ -57,51 +57,58 @@ function isMarketOpenIST() {
   const ist = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
   const h = ist.getHours();
   const m = ist.getMinutes();
+  const day = ist.getDay();  // 0=Sunday, 6=Saturday
+  if (day === 0 || day === 6) return false;  // Weekend
   return (h > 8 || (h === 8 && m >= 30)) && (h < 15 || (h === 15 && m <= 30));
 }
 
 async function sendTelegram(msg) {
-  await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: process.env.TELEGRAM_CHAT_ID, text: msg })
-  });
+  try {
+    await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: process.env.TELEGRAM_CHAT_ID, text: msg })
+    });
+  } catch (e) {
+    console.error("Telegram send failed:", e.message);
+  }
 }
 
 async function logToSheet(row) {
-  const doc = new GoogleSpreadsheet(process.env.SPREADSHEET_ID);
-  await doc.useServiceAccountAuth(JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON));
-  await doc.loadInfo();
-  await doc.sheetsByIndex[0].addRow(row);
+  try {
+    const doc = new GoogleSpreadsheet(process.env.SPREADSHEET_ID);
+    await doc.useServiceAccountAuth(JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON));
+    await doc.loadInfo();
+    await doc.sheetsByIndex[0].addRow(row);
+  } catch (e) {
+    console.error("Sheet log failed:", e.message);
+  }
 }
 
-/* ================= NSE ================= */
+/* ================= YAHOO FINANCE DATA ================= */
 
-let cookie = "";
+async function fetchCloses(symbol) {
+  try {
+    console.log(`Fetching data for ${symbol.replace('.NS', '')}`);
+    
+    // Fetch last ~3 months daily data (enough for EMA21 + buffer)
+    const quote = await yahooFinance.historical(symbol, {
+      period: "3mo",   // or { from: "2025-01-01" }
+      interval: "1d"
+    });
 
-async function refreshCookie() {
-  const r = await fetch("https://www.nseindia.com", {
-    headers: { "User-Agent": "Mozilla/5.0" }
-  });
-  cookie = r.headers.get("set-cookie");
-}
-
-async function fetchNSECandles(symbol) {
-  if (!cookie) await refreshCookie();
-
-  const url = `https://www.nseindia.com/api/chart-databyindex?index=${symbol}`;
-
-  const r = await fetch(url, {
-    headers: {
-      "User-Agent": "Mozilla/5.0",
-      "Accept": "application/json",
-      "Referer": "https://www.nseindia.com",
-      "Cookie": cookie
+    if (!quote || quote.length < 40) {
+      console.log(`Not enough data for ${symbol.replace('.NS', '')} (${quote?.length || 0} candles)`);
+      return [];
     }
-  });
 
-  const j = await r.json();
-  return j?.grapthData?.map(x => Number(x[1])).filter(Boolean) || [];
+    const closes = quote.map(day => day.close).filter(Boolean);
+    console.log(`Got ${closes.length} closes for ${symbol.replace('.NS', '')}`);
+    return closes;
+  } catch (e) {
+    console.error(`Yahoo fetch error for ${symbol.replace('.NS', '')}:`, e.message);
+    return [];
+  }
 }
 
 /* ================= CONFIDENCE ================= */
@@ -119,26 +126,27 @@ function confidence(ema9, ema21, rsi) {
 const cooldown = new Map();
 
 async function run() {
-
   if (!isMarketOpenIST()) {
-    console.log("⏰ Market closed — skipping scan");
+    console.log("⏰ Market closed or weekend — skipping scan");
     return;
   }
 
+  console.log(`Starting scan of ${SYMBOLS.length} symbols...`);
+
   for (const sym of SYMBOLS) {
+    const plainSym = sym.replace('.NS', '');
 
     try {
-
-      console.log("Scanning", sym);
+      console.log(`Scanning ${plainSym}`);
       await sleep(DELAY_MS);
 
-      const closes = await fetchNSECandles(sym);
+      const closes = await fetchCloses(sym);
       if (closes.length < 40) continue;
 
       const ema9 = EMA.calculate({ period: 9, values: closes }).at(-1);
       const ema21 = EMA.calculate({ period: 21, values: closes }).at(-1);
-      const prev9 = EMA.calculate({ period: 9, values: closes.slice(0,-1) }).at(-1);
-      const prev21 = EMA.calculate({ period: 21, values: closes.slice(0,-1) }).at(-1);
+      const prev9 = EMA.calculate({ period: 9, values: closes.slice(0, -1) }).at(-1);
+      const prev21 = EMA.calculate({ period: 21, values: closes.slice(0, -1) }).at(-1);
       const rsi = RSI.calculate({ period: 14, values: closes }).at(-1);
 
       if (!ema9 || !ema21 || !prev9 || !prev21 || !rsi) continue;
@@ -149,10 +157,13 @@ async function run() {
       const conf = confidence(ema9, ema21, rsi);
       if (conf < MIN_CONFIDENCE) continue;
 
-      const last = cooldown.get(sym);
-      if (last && Date.now() - last < COOLDOWN_MINUTES * 60000) continue;
+      const last = cooldown.get(plainSym);
+      if (last && Date.now() - last < COOLDOWN_MINUTES * 60000) {
+        console.log(`Cooldown active for ${plainSym}`);
+        continue;
+      }
 
-      cooldown.set(sym, Date.now());
+      cooldown.set(plainSym, Date.now());
 
       const entry = closes.at(-1);
       const sl = entry * (1 - SL_PCT / 100);
@@ -160,16 +171,15 @@ async function run() {
 
       const msg = `📈 BUY SIGNAL
 
-${sym}
+${plainSym}
 Entry: ${entry.toFixed(2)}
 SL: ${sl.toFixed(2)}
 Target: ${target.toFixed(2)}
 Confidence: ${conf}/100`;
 
       await sendTelegram(msg);
-
       await logToSheet({
-        Symbol: sym,
+        Symbol: plainSym,
         Entry: entry,
         SL: sl,
         Target: target,
@@ -177,13 +187,14 @@ Confidence: ${conf}/100`;
         Time: new Date().toISOString()
       });
 
-      console.log(`✅ Alert sent: ${sym}`);
+      console.log(`✅ Alert sent: ${plainSym} (Conf: ${conf})`);
 
     } catch (e) {
-      console.log(`❌ ${sym}`, e.message);
-      cookie = "";
+      console.error(`❌ Error on ${plainSym}:`, e.message);
     }
   }
+
+  console.log("Scan completed!");
 }
 
 await run();
