@@ -2,29 +2,29 @@ name: NSE Scanner
 
 on:
   schedule:
-    - cron: "*/5 4-10 * * 1-5"  # Mon-Fri, ~4-10 AM UTC ≈ NSE hours IST
-  workflow_dispatch:           # Manual run from GitHub UI
+    - cron: "*/5 4-10 * * 1-5"  # Mon-Fri ~9:30-15:30 IST approx
+  workflow_dispatch:
   repository_dispatch:
     types: [external_trigger]
 
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 30        # Safety: max 30 min run
+    timeout-minutes: 30
 
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: 22         # No warning, yahoo-finance2 happy
+          node-version: 22
 
       - name: Install dependencies
         run: npm install
 
-      - name: Run scanner
+      - name: Run scanner script
         run: node src/index.js
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
