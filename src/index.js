@@ -1,11 +1,17 @@
 /**
- * NSE EMA Scanner – FIXED v3 YAHOO-FINANCE2 VERSION
+ * NSE EMA Scanner – FINAL FIXED VERSION (Yahoo Finance v3 Corrected)
+ * Last fix: Jan 29 2026 - correct historical options with timestamps
  */
 
 import fetch from "node-fetch";
 import { EMA, RSI } from "technicalindicators";
 import { GoogleSpreadsheet } from "google-spreadsheet";
-import YahooFinance from "yahoo-finance2";  // ← Changed: capital Y, class import
+import YahooFinance from "yahoo-finance2";
+
+// Suppress noisy notices
+const yahoo = new YahooFinance({
+  suppressNotices: ['ripHistorical']
+});
 
 /* ================= CONFIG ================= */
 
@@ -86,26 +92,32 @@ async function logToSheet(row) {
   }
 }
 
-/* ================= YAHOO FINANCE v3 ================= */
-
-const yahoo = new YahooFinance();  // ← NEW: Instantiate once here!
+/* ================= DATA FETCH – FIXED ================= */
 
 async function fetchCloses(symbol) {
   try {
     const plain = symbol.replace('.NS', '');
     console.log(`Fetching ${plain}`);
 
-    const history = await yahoo.historical(symbol, {  // ← yahoo. (instance), not yahooFinance.
-      period: "3mo",
+    // Unix timestamps in seconds (required for v3)
+    const to   = Math.floor(Date.now() / 1000);           // now
+    const from = to - (90 * 24 * 60 * 60);                // 90 days ago
+
+    const history = await yahoo.historical(symbol, {
+      period1: from,
+      period2: to,
       interval: "1d"
     });
 
     if (!history || history.length < 40) {
-      console.log(`Insufficient data ${plain} (${history?.length || 0} days)`);
+      console.log(`Insufficient data for ${plain} (${history?.length || 0} days)`);
       return [];
     }
 
-    const closes = history.map(day => day.close).filter(v => typeof v === 'number' && !isNaN(v));
+    const closes = history
+      .map(day => day.close)
+      .filter(v => typeof v === 'number' && !isNaN(v));
+
     console.log(`Got ${closes.length} closes for ${plain}`);
     return closes;
   } catch (e) {
@@ -124,7 +136,7 @@ function confidence(ema9, ema21, rsi) {
   return score;
 }
 
-/* ================= MAIN ================= */
+/* ================= MAIN SCAN ================= */
 
 const cooldown = new Map();
 
@@ -187,7 +199,7 @@ async function run() {
       console.log(`✅ Alert sent: ${plainSym} (Conf ${conf})`);
 
     } catch (e) {
-      console.error(`Error ${plainSym}:`, e.message);
+      console.error(`Error on ${plainSym}:`, e.message);
     }
   }
 
