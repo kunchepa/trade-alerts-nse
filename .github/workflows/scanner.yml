@@ -3,7 +3,11 @@ name: NSE Scanner
 on:
   schedule:
     - cron: "*/5 4-10 * * 1-5"
+
   workflow_dispatch:
+
+  repository_dispatch:
+    types: [external_trigger]
 
 jobs:
   scan:
