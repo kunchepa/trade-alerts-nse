@@ -84,7 +84,7 @@ async function refreshCookie() {
 async function fetchNSECandles(symbol) {
   if (!cookie) await refreshCookie();
 
-  const url = `https://www.nseindia.com/api/chart-databyindex?index=${symbol}EQN&indices=true`;
+  const url = `https://www.nseindia.com/api/chart-databyindex?index=${symbol}`;
 
   const r = await fetch(url, {
     headers: {
@@ -96,7 +96,10 @@ async function fetchNSECandles(symbol) {
   });
 
   const j = await r.json();
-  return j?.grapthData || [];
+
+  return j?.grapthData?.map(x => ({
+    close: Number(x[1])
+  })) || [];
 }
 
 /* ================= CONFIDENCE ================= */
@@ -118,13 +121,23 @@ async function run() {
   for (const sym of SYMBOLS) {
 
     try {
+      for (const sym of SYMBOLS) {
+
+  try {
+
+    console.log("Scanning", sym);   // 👈 ADD THIS LINE HERE
+
+    await sleep(DELAY_MS);
+
+    const raw = await fetchNSECandles(sym);
+    if (raw.length < 40) continue;
 
       await sleep(DELAY_MS);
 
       const raw = await fetchNSECandles(sym);
       if (raw.length < 40) continue;
 
-      const closes = raw.map(x => x[1]).filter(Boolean);
+      const closes = raw.map(x => x.close).filter(Boolean);
 
       const ema9 = EMA.calculate({ period: 9, values: closes }).at(-1);
       const ema21 = EMA.calculate({ period: 21, values: closes }).at(-1);
