@@ -1,5 +1,5 @@
 /**
- * NSE EMA Scanner (Yahoo removed)
+ * NSE EMA Scanner – FINAL WORKING VERSION
  */
 
 import fetch from "node-fetch";
@@ -11,25 +11,15 @@ import { GoogleSpreadsheet } from "google-spreadsheet";
 const SL_PCT = 0.7;
 const TARGET_PCT = 1.4;
 const MIN_CONFIDENCE = 60;
-const COOLDOWN_MINUTES = 30;
 const DELAY_MS = 1200;
 
-/* ================= SYMBOLS ================= */
+/* ================= SYMBOLS (NO .NS) ================= */
 
 const SYMBOLS = [
-  "RELIANCE.NS","TCS.NS","HDFCBANK.NS","INFY.NS","HDFC.NS","ICICIBANK.NS","KOTAKBANK.NS","LT.NS",
-  "SBIN.NS","AXISBANK.NS","BAJFINANCE.NS","BHARTIARTL.NS","ITC.NS","HINDUNILVR.NS","MARUTI.NS",
-  "SUNPHARMA.NS","BAJAJFINSV.NS","ASIANPAINT.NS","NESTLEIND.NS","TITAN.NS","ONGC.NS","POWERGRID.NS",
-  "ULTRACEMCO.NS","NTPC.NS","DRREDDY.NS","HCLTECH.NS","INDUSINDBK.NS","DIVISLAB.NS","ADANIPORTS.NS",
-  "JSWSTEEL.NS","COALINDIA.NS","ADANIENT.NS","M&M.NS","TATASTEEL.NS","GRASIM.NS","WIPRO.NS",
-  "HDFCLIFE.NS","TECHM.NS","SBILIFE.NS","BRITANNIA.NS","CIPLA.NS","EICHERMOT.NS","HINDALCO.NS",
-  "HEROMOTOCO.NS","BPCL.NS","SHREECEM.NS","IOC.NS","TATACONSUM.NS","UPL.NS","ADANIGREEN.NS",
-  "VEDL.NS","DLF.NS","PIDILITIND.NS","ICICIPRULI.NS","JSWENERGY.NS","BANKBARODA.NS","CANBK.NS",
-  "PNB.NS","UNIONBANK.NS","BANDHANBNK.NS","IDFCFIRSTB.NS","GAIL.NS","TATAPOWER.NS","TORNTPHARM.NS",
-  "ABB.NS","SIEMENS.NS","MUTHOOTFIN.NS","BAJAJ-AUTO.NS","PEL.NS","AMBUJACEM.NS","ACC.NS","BEL.NS",
-  "HAL.NS","IRCTC.NS","PAYTM.NS","POLYCAB.NS","ZOMATO.NS","NAUKRI.NS","BOSCHLTD.NS","ASHOKLEY.NS",
-  "TVSMOTOR.NS","MFSL.NS","CHOLAFIN.NS","INDIGO.NS","DABUR.NS","EMAMILTD.NS","MGL.NS","IGL.NS",
-  "LUPIN.NS","BIOCON.NS","APOLLOHOSP.NS","MAXHEALTH.NS","FORTIS.NS"
+  "RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK","SBIN","AXISBANK","ITC",
+  "LT","BHARTIARTL","BAJFINANCE","MARUTI","SUNPHARMA","ONGC","TATASTEEL",
+  "WIPRO","ADANIPORTS","JSWSTEEL","HINDALCO","POWERGRID","NTPC","TECHM",
+  "ZOMATO","IRCTC","BEL","HAL","IOC","PNB","CANBK"
 ];
 
 /* ================= ENV ================= */
@@ -57,8 +47,7 @@ async function sendTelegram(msg) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       chat_id: process.env.TELEGRAM_CHAT_ID,
-      text: msg,
-      parse_mode: "Markdown"
+      text: msg
     })
   });
 }
@@ -82,6 +71,7 @@ async function refreshCookie() {
 }
 
 async function fetchNSECandles(symbol) {
+
   if (!cookie) await refreshCookie();
 
   const url = `https://www.nseindia.com/api/chart-databyindex?index=${symbol}`;
@@ -97,9 +87,7 @@ async function fetchNSECandles(symbol) {
 
   const j = await r.json();
 
-  return j?.grapthData?.map(x => ({
-    close: Number(x[1])
-  })) || [];
+  return j?.grapthData?.map(x => Number(x[1])) || [];
 }
 
 /* ================= CONFIDENCE ================= */
@@ -114,30 +102,18 @@ function confidence(ema9, ema21, rsi) {
 
 /* ================= MAIN ================= */
 
-const alerted = new Map();
-
 async function run() {
 
   for (const sym of SYMBOLS) {
 
     try {
-      for (const sym of SYMBOLS) {
 
-  try {
-
-    console.log("Scanning", sym);   // 👈 ADD THIS LINE HERE
-
-    await sleep(DELAY_MS);
-
-    const raw = await fetchNSECandles(sym);
-    if (raw.length < 40) continue;
+      console.log("Scanning", sym);
 
       await sleep(DELAY_MS);
 
-      const raw = await fetchNSECandles(sym);
-      if (raw.length < 40) continue;
-
-      const closes = raw.map(x => x.close).filter(Boolean);
+      const closes = await fetchNSECandles(sym);
+      if (closes.length < 40) continue;
 
       const ema9 = EMA.calculate({ period: 9, values: closes }).at(-1);
       const ema21 = EMA.calculate({ period: 21, values: closes }).at(-1);
@@ -156,8 +132,8 @@ async function run() {
       if (conf < MIN_CONFIDENCE) continue;
 
       const entry = closes.at(-1);
-      const sl = entry * (1 - SL_PCT/100);
-      const target = entry * (1 + TARGET_PCT/100);
+      const sl = entry * (1 - SL_PCT / 100);
+      const target = entry * (1 + TARGET_PCT / 100);
 
       const msg = `
 📈 BUY SIGNAL
@@ -180,7 +156,7 @@ Confidence: ${conf}/100
         Time: new Date().toISOString()
       });
 
-      console.log(`✅ ${sym}`);
+      console.log(`✅ Alert sent for ${sym}`);
 
     } catch(e) {
       console.log(`❌ ${sym}`, e.message);
