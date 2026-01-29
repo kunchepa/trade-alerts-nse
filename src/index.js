@@ -1,18 +1,18 @@
 /**
- * NSE EMA Scanner – FIXED PRODUCTION VERSION (Yahoo Finance Backend)
+ * NSE EMA Scanner – FIXED v3 YAHOO-FINANCE2 VERSION
  */
 
 import fetch from "node-fetch";
 import { EMA, RSI } from "technicalindicators";
 import { GoogleSpreadsheet } from "google-spreadsheet";
-import yahooFinance from "yahoo-finance2";  // NEW: Reliable free source for NSE data
+import YahooFinance from "yahoo-finance2";  // ← Changed: capital Y, class import
 
 /* ================= CONFIG ================= */
 
 const SL_PCT = 0.7;
 const TARGET_PCT = 1.4;
 const MIN_CONFIDENCE = 60;
-const DELAY_MS = 2000;  // Increased for safety (Yahoo allows ~2000 calls/hour free)
+const DELAY_MS = 2000;
 const COOLDOWN_MINUTES = 30;
 
 /* ================= SYMBOLS ================= */
@@ -31,7 +31,7 @@ const SYMBOLS = [
   "HAL","IRCTC","PAYTM","POLYCAB","ETERNAL","NAUKRI","BOSCHLTD","ASHOKLEY","TMCV",
   "TVSMOTOR","MFSL","CHOLAFIN","INDIGO","DABUR","EMAMILTD","MGL","IGL",
   "LUPIN","BIOCON","APOLLOHOSP","MAXHEALTH","FORTIS"
-].map(sym => `${sym}.NS`);  // Add .NS suffix for Yahoo Finance NSE
+].map(sym => `${sym}.NS`);
 
 /* ================= ENV ================= */
 
@@ -57,20 +57,21 @@ function isMarketOpenIST() {
   const ist = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
   const h = ist.getHours();
   const m = ist.getMinutes();
-  const day = ist.getDay();  // 0=Sunday, 6=Saturday
-  if (day === 0 || day === 6) return false;  // Weekend
+  const day = ist.getDay();
+  if (day === 0 || day === 6) return false;
   return (h > 8 || (h === 8 && m >= 30)) && (h < 15 || (h === 15 && m <= 30));
 }
 
 async function sendTelegram(msg) {
   try {
-    await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    const res = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chat_id: process.env.TELEGRAM_CHAT_ID, text: msg })
     });
+    if (!res.ok) throw new Error(`Telegram HTTP ${res.status}`);
   } catch (e) {
-    console.error("Telegram send failed:", e.message);
+    console.error("Telegram failed:", e.message);
   }
 }
 
@@ -85,28 +86,30 @@ async function logToSheet(row) {
   }
 }
 
-/* ================= YAHOO FINANCE DATA ================= */
+/* ================= YAHOO FINANCE v3 ================= */
+
+const yahoo = new YahooFinance();  // ← NEW: Instantiate once here!
 
 async function fetchCloses(symbol) {
   try {
-    console.log(`Fetching data for ${symbol.replace('.NS', '')}`);
-    
-    // Fetch last ~3 months daily data (enough for EMA21 + buffer)
-    const quote = await yahooFinance.historical(symbol, {
-      period: "3mo",   // or { from: "2025-01-01" }
+    const plain = symbol.replace('.NS', '');
+    console.log(`Fetching ${plain}`);
+
+    const history = await yahoo.historical(symbol, {  // ← yahoo. (instance), not yahooFinance.
+      period: "3mo",
       interval: "1d"
     });
 
-    if (!quote || quote.length < 40) {
-      console.log(`Not enough data for ${symbol.replace('.NS', '')} (${quote?.length || 0} candles)`);
+    if (!history || history.length < 40) {
+      console.log(`Insufficient data ${plain} (${history?.length || 0} days)`);
       return [];
     }
 
-    const closes = quote.map(day => day.close).filter(Boolean);
-    console.log(`Got ${closes.length} closes for ${symbol.replace('.NS', '')}`);
+    const closes = history.map(day => day.close).filter(v => typeof v === 'number' && !isNaN(v));
+    console.log(`Got ${closes.length} closes for ${plain}`);
     return closes;
   } catch (e) {
-    console.error(`Yahoo fetch error for ${symbol.replace('.NS', '')}:`, e.message);
+    console.error(`Fetch error ${symbol.replace('.NS', '')}:`, e.message);
     return [];
   }
 }
@@ -114,11 +117,11 @@ async function fetchCloses(symbol) {
 /* ================= CONFIDENCE ================= */
 
 function confidence(ema9, ema21, rsi) {
-  let s = 0;
-  if (ema9 > ema21) s += 40;
-  if (rsi > 55 && rsi < 70) s += 30;
-  if (rsi > 50) s += 30;
-  return s;
+  let score = 0;
+  if (ema9 > ema21) score += 40;
+  if (rsi > 55 && rsi < 70) score += 30;
+  if (rsi > 50) score += 30;
+  return score;
 }
 
 /* ================= MAIN ================= */
@@ -127,11 +130,11 @@ const cooldown = new Map();
 
 async function run() {
   if (!isMarketOpenIST()) {
-    console.log("⏰ Market closed or weekend — skipping scan");
+    console.log("⏰ Market closed or weekend — skipping");
     return;
   }
 
-  console.log(`Starting scan of ${SYMBOLS.length} symbols...`);
+  console.log(`Scan started — ${SYMBOLS.length} symbols`);
 
   for (const sym of SYMBOLS) {
     const plainSym = sym.replace('.NS', '');
@@ -143,39 +146,33 @@ async function run() {
       const closes = await fetchCloses(sym);
       if (closes.length < 40) continue;
 
-      const ema9 = EMA.calculate({ period: 9, values: closes }).at(-1);
-      const ema21 = EMA.calculate({ period: 21, values: closes }).at(-1);
-      const prev9 = EMA.calculate({ period: 9, values: closes.slice(0, -1) }).at(-1);
-      const prev21 = EMA.calculate({ period: 21, values: closes.slice(0, -1) }).at(-1);
-      const rsi = RSI.calculate({ period: 14, values: closes }).at(-1);
+      const ema9    = EMA.calculate({ period: 9,  values: closes }).at(-1);
+      const ema21   = EMA.calculate({ period: 21, values: closes }).at(-1);
+      const prev9   = EMA.calculate({ period: 9,  values: closes.slice(0, -1) }).at(-1);
+      const prev21  = EMA.calculate({ period: 21, values: closes.slice(0, -1) }).at(-1);
+      const rsi     = RSI.calculate({ period: 14, values: closes }).at(-1);
 
       if (!ema9 || !ema21 || !prev9 || !prev21 || !rsi) continue;
 
-      const fresh = prev9 <= prev21 && ema9 > ema21;
-      if (!fresh || rsi < 50) continue;
+      const freshCrossover = prev9 <= prev21 && ema9 > ema21;
+      if (!freshCrossover || rsi < 50) continue;
 
       const conf = confidence(ema9, ema21, rsi);
       if (conf < MIN_CONFIDENCE) continue;
 
-      const last = cooldown.get(plainSym);
-      if (last && Date.now() - last < COOLDOWN_MINUTES * 60000) {
-        console.log(`Cooldown active for ${plainSym}`);
+      const lastAlert = cooldown.get(plainSym);
+      if (lastAlert && Date.now() - lastAlert < COOLDOWN_MINUTES * 60_000) {
+        console.log(`Cooldown skip ${plainSym}`);
         continue;
       }
 
       cooldown.set(plainSym, Date.now());
 
-      const entry = closes.at(-1);
-      const sl = entry * (1 - SL_PCT / 100);
+      const entry  = closes.at(-1);
+      const sl     = entry * (1 - SL_PCT / 100);
       const target = entry * (1 + TARGET_PCT / 100);
 
-      const msg = `📈 BUY SIGNAL
-
-${plainSym}
-Entry: ${entry.toFixed(2)}
-SL: ${sl.toFixed(2)}
-Target: ${target.toFixed(2)}
-Confidence: ${conf}/100`;
+      const msg = `📈 BUY SIGNAL\n\n${plainSym}\nEntry: ${entry.toFixed(2)}\nSL: ${sl.toFixed(2)}\nTarget: ${target.toFixed(2)}\nConfidence: ${conf}/100`;
 
       await sendTelegram(msg);
       await logToSheet({
@@ -187,14 +184,14 @@ Confidence: ${conf}/100`;
         Time: new Date().toISOString()
       });
 
-      console.log(`✅ Alert sent: ${plainSym} (Conf: ${conf})`);
+      console.log(`✅ Alert sent: ${plainSym} (Conf ${conf})`);
 
     } catch (e) {
-      console.error(`❌ Error on ${plainSym}:`, e.message);
+      console.error(`Error ${plainSym}:`, e.message);
     }
   }
 
-  console.log("Scan completed!");
+  console.log("Full scan completed!");
 }
 
 await run();
