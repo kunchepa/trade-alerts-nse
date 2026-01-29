@@ -1,6 +1,5 @@
 /**
- * NSE EMA Scanner – FINAL FIXED VERSION (Yahoo Finance v3 Corrected)
- * Last fix: Jan 29 2026 - correct historical options with timestamps
+ * NSE EMA Scanner – FINAL REVISED VERSION (No new files, debug for Sheets)
  */
 
 import fetch from "node-fetch";
@@ -8,13 +7,12 @@ import { EMA, RSI } from "technicalindicators";
 import { GoogleSpreadsheet } from "google-spreadsheet";
 import YahooFinance from "yahoo-finance2";
 
-// Suppress noisy notices
+// Suppress deprecation notice
 const yahoo = new YahooFinance({
   suppressNotices: ['ripHistorical']
 });
 
 /* ================= CONFIG ================= */
-
 const SL_PCT = 0.7;
 const TARGET_PCT = 1.4;
 const MIN_CONFIDENCE = 60;
@@ -22,7 +20,6 @@ const DELAY_MS = 2000;
 const COOLDOWN_MINUTES = 30;
 
 /* ================= SYMBOLS ================= */
-
 const SYMBOLS = [
   "RELIANCE","TCS","HDFCBANK","INFY","HDFC","ICICIBANK","KOTAKBANK","LT",
   "SBIN","AXISBANK","BAJFINANCE","BHARTIARTL","ITC","HINDUNILVR","MARUTI",
@@ -39,8 +36,7 @@ const SYMBOLS = [
   "LUPIN","BIOCON","APOLLOHOSP","MAXHEALTH","FORTIS"
 ].map(sym => `${sym}.NS`);
 
-/* ================= ENV ================= */
-
+/* ================= ENV CHECK ================= */
 const REQUIRED_ENV = [
   "TELEGRAM_BOT_TOKEN",
   "TELEGRAM_CHAT_ID",
@@ -49,13 +45,14 @@ const REQUIRED_ENV = [
 ];
 
 for (const k of REQUIRED_ENV) {
-  if (!process.env[k]) throw new Error(`Missing ENV ${k}`);
+  if (!process.env[k]) {
+    console.error(`CRITICAL: Missing env ${k}`);
+    process.exit(1);
+  }
 }
-
-console.log("✅ All environment variables loaded");
+console.log("✅ All env variables loaded");
 
 /* ================= HELPERS ================= */
-
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 function isMarketOpenIST() {
@@ -73,35 +70,59 @@ async function sendTelegram(msg) {
     const res = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: process.env.TELEGRAM_CHAT_ID, text: msg })
+      body: JSON.stringify({ chat_id: process.env.TELEGRAM_CHAT_ID, text: msg, parse_mode: "Markdown" })
     });
-    if (!res.ok) throw new Error(`Telegram HTTP ${res.status}`);
+    if (!res.ok) {
+      const errText = await res.text();
+      console.error("Telegram failed:", res.status, errText);
+    } else {
+      console.log("Telegram sent OK");
+    }
   } catch (e) {
-    console.error("Telegram failed:", e.message);
+    console.error("Telegram error:", e.message);
   }
 }
 
 async function logToSheet(row) {
   try {
-    const doc = new GoogleSpreadsheet(process.env.SPREADSHEET_ID);
-    await doc.useServiceAccountAuth(JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON));
+    console.log("[SHEET] Logging row for:", row.Symbol);
+
+    const spreadsheetId = process.env.SPREADSHEET_ID;
+    console.log("[SHEET] Spreadsheet ID:", spreadsheetId.substring(0, 10) + "...");
+
+    let auth;
+    try {
+      auth = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
+      console.log("[SHEET] Auth parsed, email:", auth.client_email);
+    } catch (err) {
+      console.error("[SHEET] JSON parse error:", err.message);
+      console.error("[SHEET] Secret length:", process.env.GOOGLE_SERVICE_ACCOUNT_JSON?.length || 0);
+      throw err;
+    }
+
+    const doc = new GoogleSpreadsheet(spreadsheetId);
+    await doc.useServiceAccountAuth(auth);
     await doc.loadInfo();
-    await doc.sheetsByIndex[0].addRow(row);
+    console.log("[SHEET] Doc loaded:", doc.title);
+
+    const sheet = doc.sheetsByIndex[0];
+    await sheet.addRow(row);
+    console.log(`[SHEET] SUCCESS: Added ${row.Symbol}`);
   } catch (e) {
-    console.error("Sheet log failed:", e.message);
+    console.error("[SHEET] FAIL:", e.message);
+    if (e.code) console.error("Error code:", e.code);
+    if (e.response?.data) console.error("Google response:", JSON.stringify(e.response.data));
   }
 }
 
-/* ================= DATA FETCH – FIXED ================= */
-
+/* ================= DATA FETCH ================= */
 async function fetchCloses(symbol) {
   try {
     const plain = symbol.replace('.NS', '');
     console.log(`Fetching ${plain}`);
 
-    // Unix timestamps in seconds (required for v3)
-    const to   = Math.floor(Date.now() / 1000);           // now
-    const from = to - (90 * 24 * 60 * 60);                // 90 days ago
+    const to = Math.floor(Date.now() / 1000);
+    const from = to - (90 * 24 * 60 * 60);
 
     const history = await yahoo.historical(symbol, {
       period1: from,
@@ -110,24 +131,20 @@ async function fetchCloses(symbol) {
     });
 
     if (!history || history.length < 40) {
-      console.log(`Insufficient data for ${plain} (${history?.length || 0} days)`);
+      console.log(`No enough data ${plain} (${history?.length || 0})`);
       return [];
     }
 
-    const closes = history
-      .map(day => day.close)
-      .filter(v => typeof v === 'number' && !isNaN(v));
-
+    const closes = history.map(day => day.close).filter(v => !isNaN(v));
     console.log(`Got ${closes.length} closes for ${plain}`);
     return closes;
   } catch (e) {
-    console.error(`Fetch error ${symbol.replace('.NS', '')}:`, e.message);
+    console.error(`Fetch fail ${symbol}:`, e.message);
     return [];
   }
 }
 
 /* ================= CONFIDENCE ================= */
-
 function confidence(ema9, ema21, rsi) {
   let score = 0;
   if (ema9 > ema21) score += 40;
@@ -136,45 +153,41 @@ function confidence(ema9, ema21, rsi) {
   return score;
 }
 
-/* ================= MAIN SCAN ================= */
-
+/* ================= MAIN ================= */
 const cooldown = new Map();
 
 async function run() {
   if (!isMarketOpenIST()) {
-    console.log("⏰ Market closed or weekend — skipping");
+    console.log("Market closed, skipping");
     return;
   }
 
-  console.log(`Scan started — ${SYMBOLS.length} symbols`);
+  console.log(`Scan start - ${SYMBOLS.length} symbols`);
 
   for (const sym of SYMBOLS) {
     const plainSym = sym.replace('.NS', '');
 
     try {
-      console.log(`Scanning ${plainSym}`);
       await sleep(DELAY_MS);
-
       const closes = await fetchCloses(sym);
       if (closes.length < 40) continue;
 
-      const ema9    = EMA.calculate({ period: 9,  values: closes }).at(-1);
-      const ema21   = EMA.calculate({ period: 21, values: closes }).at(-1);
-      const prev9   = EMA.calculate({ period: 9,  values: closes.slice(0, -1) }).at(-1);
-      const prev21  = EMA.calculate({ period: 21, values: closes.slice(0, -1) }).at(-1);
-      const rsi     = RSI.calculate({ period: 14, values: closes }).at(-1);
+      const ema9   = EMA.calculate({ period: 9, values: closes }).at(-1);
+      const ema21  = EMA.calculate({ period: 21, values: closes }).at(-1);
+      const prev9  = EMA.calculate({ period: 9, values: closes.slice(0, -1) }).at(-1);
+      const prev21 = EMA.calculate({ period: 21, values: closes.slice(0, -1) }).at(-1);
+      const rsi    = RSI.calculate({ period: 14, values: closes }).at(-1);
 
       if (!ema9 || !ema21 || !prev9 || !prev21 || !rsi) continue;
 
-      const freshCrossover = prev9 <= prev21 && ema9 > ema21;
-      if (!freshCrossover || rsi < 50) continue;
+      const crossover = prev9 <= prev21 && ema9 > ema21;
+      if (!crossover || rsi < 50) continue;
 
       const conf = confidence(ema9, ema21, rsi);
       if (conf < MIN_CONFIDENCE) continue;
 
-      const lastAlert = cooldown.get(plainSym);
-      if (lastAlert && Date.now() - lastAlert < COOLDOWN_MINUTES * 60_000) {
-        console.log(`Cooldown skip ${plainSym}`);
+      if (cooldown.has(plainSym) && Date.now() - cooldown.get(plainSym) < COOLDOWN_MINUTES * 60000) {
+        console.log(`Cooldown: ${plainSym}`);
         continue;
       }
 
@@ -184,26 +197,29 @@ async function run() {
       const sl     = entry * (1 - SL_PCT / 100);
       const target = entry * (1 + TARGET_PCT / 100);
 
-      const msg = `📈 BUY SIGNAL\n\n${plainSym}\nEntry: ${entry.toFixed(2)}\nSL: ${sl.toFixed(2)}\nTarget: ${target.toFixed(2)}\nConfidence: ${conf}/100`;
+      const msg = `📈 BUY SIGNAL\n\n**${plainSym}**\nEntry: ${entry.toFixed(2)}\nSL: ${sl.toFixed(2)}\nTarget: ${target.toFixed(2)}\nConfidence: ${conf}/100`;
 
       await sendTelegram(msg);
+
       await logToSheet({
         Symbol: plainSym,
-        Entry: entry,
-        SL: sl,
+        Direction: "BUY",
+        EntryPrice: entry,
         Target: target,
+        StopLoss: sl,
+        Plus2Check: "PENDING",
         Confidence: conf,
         Time: new Date().toISOString()
       });
 
-      console.log(`✅ Alert sent: ${plainSym} (Conf ${conf})`);
+      console.log(`Alert sent: ${plainSym} (Conf ${conf})`);
 
     } catch (e) {
-      console.error(`Error on ${plainSym}:`, e.message);
+      console.error(`Error ${plainSym}:`, e.message);
     }
   }
 
-  console.log("Full scan completed!");
+  console.log("Scan complete!");
 }
 
 await run();
