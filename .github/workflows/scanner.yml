@@ -2,8 +2,12 @@ name: NSE Scanner
 
 on:
   schedule:
+    # 09:30 AM – 02:59 PM IST (every 5 mins)
     - cron: "*/5 4-8 * * 1-5"
+
+    # 02:30 PM – 03:00 PM IST window
     - cron: "0-30/5 9 * * 1-5"
+
   workflow_dispatch:
   repository_dispatch:
     types: [external_trigger]
@@ -24,6 +28,24 @@ jobs:
 
       - name: Install dependencies
         run: npm install
+
+      # ================= NSE MARKET TIME GUARD =================
+      - name: Check IST market time (Hard stop after 3:00 PM)
+        run: |
+          HOUR=$(date -u +%H)
+          MIN=$(date -u +%M)
+
+          TOTAL=$((10#$HOUR*60 + 10#$MIN))
+
+          # NSE Window in UTC minutes
+          # Start: 04:00 UTC = 240  (09:30 IST)
+          # End:   09:30 UTC = 570  (15:00 IST)
+
+          if [ $TOTAL -lt 240 ] || [ $TOTAL -gt 570 ]; then
+            echo "Outside NSE trading hours. Exiting."
+            exit 0
+          fi
+      # ========================================================
 
       - name: Run scanner script
         run: node src/index.js
