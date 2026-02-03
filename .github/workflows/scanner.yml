@@ -2,7 +2,8 @@ name: NSE Scanner
 
 on:
   schedule:
-    - cron: "*/5 4-10 * * 1-5"  # Mon-Fri ~9:30-15:30 IST approx
+    - cron: "*/5 4-8 * * 1-5"
+    - cron: "0-30/5 9 * * 1-5"
   workflow_dispatch:
   repository_dispatch:
     types: [external_trigger]
