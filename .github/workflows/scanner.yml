@@ -2,7 +2,10 @@ name: NSE Scanner
 
 on:
   schedule:
+    # 09:30 AM – 02:59 PM IST (every 5 mins)
     - cron: "*/5 4-8 * * 1-5"
+
+    # 02:30 PM – 03:00 PM IST window
     - cron: "0-30/5 9 * * 1-5"
 
   workflow_dispatch:
@@ -15,30 +18,37 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
         with:
           node-version: 22
 
-      - run: npm install
+      - name: Install dependencies
+        run: npm install
 
-      - name: Run scanner ONLY during NSE hours
+      # ================= NSE MARKET TIME GUARD =================
+      - name: Check IST market time (Hard stop after 3:00 PM)
         run: |
           HOUR=$(date -u +%H)
           MIN=$(date -u +%M)
+
           TOTAL=$((10#$HOUR*60 + 10#$MIN))
 
-          # NSE UTC window
-          # 04:00 = 240 (09:30 IST)
-          # 09:30 = 570 (15:00 IST)
+          # NSE Window in UTC minutes
+          # Start: 04:00 UTC = 240  (09:30 IST)
+          # End:   09:30 UTC = 570  (15:00 IST)
 
-          if [ $TOTAL -ge 240 ] && [ $TOTAL -le 570 ]; then
-            echo "Inside NSE hours – running scanner"
-            node src/index.js
-          else
-            echo "Outside NSE hours – skipping scanner"
+          if [ $TOTAL -lt 240 ] || [ $TOTAL -gt 570 ]; then
+            echo "Outside NSE trading hours. Exiting."
+            exit 0
           fi
+      # ========================================================
+
+      - name: Run scanner script
+        run: node src/index.js
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
