@@ -1,7 +1,6 @@
 /**
- * NSE EMA Scanner – IMPROVED VERSION with Intraday, EMA50, VWAP, Buy/Sell
- * Full Nifty 100 Symbols (Feb 2026 latest)
- * High potential calls with multiple confirmations
+ * NSE EMA Scanner – BUY ONLY VERSION (SELL signals removed)
+ * Intraday 5m, EMA50, VWAP, Full Nifty 100 Symbols (Feb 2026)
  */
 import fetch from "node-fetch";
 import { EMA, RSI } from "technicalindicators";
@@ -16,11 +15,11 @@ const yahoo = new YahooFinance({
 const SL_PCT = 0.7;
 const TARGET_PCT = 1.8;
 const MIN_CONFIDENCE = 70;
-const DELAY_MS = 3000;   // Safe for rate limits
+const DELAY_MS = 3000;
 const COOLDOWN_MINUTES = 30;
 const INTERVAL = "5m";
 
-/* ================= SYMBOLS - Full Nifty 100 (Feb 2026) ================= */
+/* ================= SYMBOLS - Full Nifty 100 ================= */
 const SYMBOLS = [
   "RELIANCE.NS", "HDFCBANK.NS", "BHARTIARTL.NS", "TCS.NS", "SBIN.NS",
   "ICICIBANK.NS", "INFY.NS", "ITC.NS", "HINDUNILVR.NS", "LT.NS",
@@ -42,7 +41,6 @@ const SYMBOLS = [
   "ABB.NS", "AMBUJACEM.NS", "ACC.NS", "VEDL.NS", "TATAPOWER.NS",
   "GAIL.NS", "PAYTM.NS", "TRENT.NS", "SHRIRAMFIN.NS", "MOTHERSON.NS",
   "BANDHANBNK.NS", "IDFCFIRSTB.NS", "JINDALSTEL.NS"
-  // Total ~100; if any missing/recent change, check NSE official and add
 ];
 
 /* ================= ENV CHECK ================= */
@@ -172,20 +170,13 @@ function calculateIndicators(bars) {
   };
 }
 
-/* ================= CONFIDENCE ================= */
-function calculateConfidence(ind, direction) {
+/* ================= CONFIDENCE (BUY only) ================= */
+function calculateConfidence(ind) {
   let score = 0;
-  if (direction === "BUY") {
-    if (ind.ema9 > ind.ema21) score += 30;
-    if (ind.ema21 > ind.ema50) score += 20;
-    if (ind.currentPrice > ind.vwap) score += 25;
-    if (ind.rsi > 52 && ind.rsi < 72) score += 25;
-  } else {
-    if (ind.ema9 < ind.ema21) score += 30;
-    if (ind.ema21 < ind.ema50) score += 20;
-    if (ind.currentPrice < ind.vwap) score += 25;
-    if (ind.rsi < 48 && ind.rsi > 28) score += 25;
-  }
+  if (ind.ema9 > ind.ema21) score += 30;
+  if (ind.ema21 > ind.ema50) score += 20;
+  if (ind.currentPrice > ind.vwap) score += 25;
+  if (ind.rsi > 52 && ind.rsi < 72) score += 25;
   return score;
 }
 
@@ -198,7 +189,7 @@ async function run() {
     return;
   }
   
-  console.log(`Scan start - ${SYMBOLS.length} symbols (5m intraday)`);
+  console.log(`Scan start - ${SYMBOLS.length} symbols (5m intraday - BUY only)`);
   
   for (const sym of SYMBOLS) {
     const plainSym = sym.replace('.NS', '');
@@ -212,18 +203,11 @@ async function run() {
       if (!ind) continue;
       
       const buyCross = ind.prevEma9 <= ind.prevEma21 && ind.ema9 > ind.ema21;
-      const sellCross = ind.prevEma9 >= ind.prevEma21 && ind.ema9 < ind.ema21;
       
-      let direction = null;
-      if (buyCross && ind.rsi > 52 && ind.currentPrice > ind.vwap && ind.ema21 > ind.ema50) {
-        direction = "BUY";
-      } else if (sellCross && ind.rsi < 48 && ind.currentPrice < ind.vwap && ind.ema21 < ind.ema50) {
-        direction = "SELL";
-      }
+      if (!buyCross) continue;
+      if (ind.rsi <= 52 || ind.currentPrice <= ind.vwap || ind.ema21 <= ind.ema50) continue;
       
-      if (!direction) continue;
-      
-      const conf = calculateConfidence(ind, direction);
+      const conf = calculateConfidence(ind);
       if (conf < MIN_CONFIDENCE) continue;
       
       if (cooldown.has(plainSym) && Date.now() - cooldown.get(plainSym) < COOLDOWN_MINUTES * 60000) {
@@ -234,21 +218,19 @@ async function run() {
       cooldown.set(plainSym, Date.now());
       
       const entry = ind.currentPrice;
-      const sl = direction === "BUY" ? entry * (1 - SL_PCT / 100) : entry * (1 + SL_PCT / 100);
-      const target = direction === "BUY" ? entry * (1 + TARGET_PCT / 100) : entry * (1 - TARGET_PCT / 100);
-      const riskReward = Math.abs((target - entry) / (entry - sl)).toFixed(2);
+      const sl = entry * (1 - SL_PCT / 100);
+      const target = entry * (1 + TARGET_PCT / 100);
+      const riskReward = ((target - entry) / (entry - sl)).toFixed(2);
       
-      const emoji = direction === "BUY" ? "📈" : "📉";
-      const action = direction === "BUY" ? "BUY" : "SELL";
       const msg = `
-${emoji} *${action} SIGNAL ALERT* ${emoji}
+📈 *BUY SIGNAL ALERT* 📈
 **${plainSym}**
 Current Price: *${entry.toFixed(2)}*
 🎯 Target: *${target.toFixed(2)}*
 🛑 Stop Loss: *${sl.toFixed(2)}*
 Risk:Reward → **1 : ${riskReward}**
 Confidence: **${conf}/100** 🔥
-Reason: EMA9 crossed ${direction === "BUY" ? "above" : "below"} EMA21 | EMA21 ${direction === "BUY" ? ">" : "<"} EMA50 | Price ${direction === "BUY" ? ">" : "<"} VWAP | RSI momentum
+Reason: EMA9 crossed above EMA21 | EMA21 > EMA50 | Price > VWAP | RSI bullish momentum
 Time (IST): ${new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "short", timeStyle: "short" })}
 ⚠️ Trade at your own risk – Not financial advice!
       `.trim();
@@ -258,7 +240,7 @@ Time (IST): ${new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dat
       await logToSheet({
         TimeIST: new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "short", timeStyle: "short" }),
         Symbol: plainSym,
-        Direction: action,
+        Direction: "BUY",
         EntryPrice: entry,
         Target: target,
         StopLoss: sl,
@@ -267,7 +249,7 @@ Time (IST): ${new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dat
         RawTimeUTC: new Date().toISOString()
       });
       
-      console.log(`Alert sent: ${plainSym} ${action} (Conf ${conf})`);
+      console.log(`Alert sent: ${plainSym} BUY (Conf ${conf})`);
     } catch (e) {
       console.error(`Error ${plainSym}: ${e.message}`);
     }
