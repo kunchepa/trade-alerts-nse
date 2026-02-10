@@ -1,42 +1,49 @@
 /**
- * NSE EMA Scanner – FINAL POLISHED VERSION
- * Sheets: TimeIST & RawTimeUTC added
- * Telegram: Attractive & insightful format
+ * NSE EMA Scanner – IMPROVED VERSION with Intraday, EMA50, VWAP, Buy/Sell
+ * Full Nifty 100 Symbols (Feb 2026 latest)
+ * High potential calls with multiple confirmations
  */
-
 import fetch from "node-fetch";
 import { EMA, RSI } from "technicalindicators";
 import { GoogleSpreadsheet } from "google-spreadsheet";
 import YahooFinance from "yahoo-finance2";
 
-// Suppress deprecation notice
 const yahoo = new YahooFinance({
   suppressNotices: ['ripHistorical']
 });
 
 /* ================= CONFIG ================= */
 const SL_PCT = 0.7;
-const TARGET_PCT = 1.4;
-const MIN_CONFIDENCE = 60;
-const DELAY_MS = 2000;
+const TARGET_PCT = 1.8;
+const MIN_CONFIDENCE = 70;
+const DELAY_MS = 3000;   // Safe for rate limits
 const COOLDOWN_MINUTES = 30;
+const INTERVAL = "5m";
 
-/* ================= SYMBOLS ================= */
+/* ================= SYMBOLS - Full Nifty 100 (Feb 2026) ================= */
 const SYMBOLS = [
-  "RELIANCE","TCS","HDFCBANK","INFY","HDFC","ICICIBANK","KOTAKBANK","LT",
-  "SBIN","AXISBANK","BAJFINANCE","BHARTIARTL","ITC","HINDUNILVR","MARUTI",
-  "SUNPHARMA","BAJAJFINSV","ASIANPAINT","NESTLEIND","TITAN","ONGC","POWERGRID",
-  "ULTRACEMCO","NTPC","DRREDDY","HCLTECH","INDUSINDBK","DIVISLAB","ADANIPORTS",
-  "JSWSTEEL","COALINDIA","ADANIENT","M&M","TATASTEEL","GRASIM","WIPRO",
-  "HDFCLIFE","TECHM","SBILIFE","BRITANNIA","CIPLA","EICHERMOT","HINDALCO",
-  "HEROMOTOCO","BPCL","SHREECEM","IOC","TATACONSUM","UPL","ADANIGREEN",
-  "VEDL","DLF","PIDILITIND","ICICIPRULI","JSWENERGY","BANKBARODA","CANBK",
-  "PNB","UNIONBANK","BANDHANBNK","IDFCFIRSTB","GAIL","TATAPOWER","TORNTPHARM",
-  "ABB","SIEMENS","MUTHOOTFIN","BAJAJ-AUTO","PEL","AMBUJACEM","ACC","BEL",
-  "HAL","IRCTC","PAYTM","POLYCAB","ETERNAL","NAUKRI","BOSCHLTD","ASHOKLEY","TMCV",
-  "TVSMOTOR","MFSL","CHOLAFIN","INDIGO","DABUR","EMAMILTD","MGL","IGL",
-  "LUPIN","BIOCON","APOLLOHOSP","MAXHEALTH","FORTIS"
-].map(sym => `${sym}.NS`);
+  "RELIANCE.NS", "HDFCBANK.NS", "BHARTIARTL.NS", "TCS.NS", "SBIN.NS",
+  "ICICIBANK.NS", "INFY.NS", "ITC.NS", "HINDUNILVR.NS", "LT.NS",
+  "BAJFINANCE.NS", "KOTAKBANK.NS", "AXISBANK.NS", "SUNPHARMA.NS", "MARUTI.NS",
+  "M&M.NS", "ULTRACEMCO.NS", "NTPC.NS", "ONGC.NS", "POWERGRID.NS",
+  "TITAN.NS", "ADANIPORTS.NS", "ADANIENT.NS", "BAJAJFINSV.NS", "INDUSINDBK.NS",
+  "TECHM.NS", "HCLTECH.NS", "ASIANPAINT.NS", "NESTLEIND.NS", "JSWSTEEL.NS",
+  "COALINDIA.NS", "TATAMOTORS.NS", "BAJAJ-AUTO.NS", "TATASTEEL.NS", "WIPRO.NS",
+  "ADANIGREEN.NS", "HDFCLIFE.NS", "SBILIFE.NS", "HEROMOTOCO.NS", "DRREDDY.NS",
+  "CIPLA.NS", "APOLLOHOSP.NS", "DIVISLAB.NS", "BRITANNIA.NS", "EICHERMOT.NS",
+  "GRASIM.NS", "BPCL.NS", "IOC.NS", "TATACONSUM.NS", "UPL.NS",
+  "HINDALCO.NS", "SHREECEM.NS", "PIDILITIND.NS", "DABUR.NS", "BOSCHLTD.NS",
+  "TVSMOTOR.NS", "SIEMENS.NS", "HAL.NS", "BEL.NS", "DLF.NS",
+  "INDIGO.NS", "ZOMATO.NS", "IRCTC.NS", "NAUKRI.NS", "LTIM.NS",
+  "GODREJCP.NS", "MUTHOOTFIN.NS", "CHOLAFIN.NS", "POLYCAB.NS", "SRF.NS",
+  "BAJAJHLDNG.NS", "CANBK.NS", "PNB.NS", "UNIONBANK.NS", "BANKBARODA.NS",
+  "IGL.NS", "MGL.NS", "TORNTPHARM.NS", "JSWENERGY.NS", "RECLTD.NS",
+  "PFC.NS", "MAXHEALTH.NS", "FORTIS.NS", "BIOCON.NS", "LUPIN.NS",
+  "ABB.NS", "AMBUJACEM.NS", "ACC.NS", "VEDL.NS", "TATAPOWER.NS",
+  "GAIL.NS", "PAYTM.NS", "TRENT.NS", "SHRIRAMFIN.NS", "MOTHERSON.NS",
+  "BANDHANBNK.NS", "IDFCFIRSTB.NS", "JINDALSTEL.NS"
+  // Total ~100; if any missing/recent change, check NSE official and add
+];
 
 /* ================= ENV CHECK ================= */
 const REQUIRED_ENV = [
@@ -45,7 +52,6 @@ const REQUIRED_ENV = [
   "SPREADSHEET_ID",
   "GOOGLE_SERVICE_ACCOUNT_JSON"
 ];
-
 for (const k of REQUIRED_ENV) {
   if (!process.env[k]) {
     console.error(`CRITICAL: Missing env ${k}`);
@@ -88,70 +94,98 @@ async function sendTelegram(msg) {
 async function logToSheet(row) {
   try {
     console.log("[SHEET] Logging row for:", row.Symbol);
-
     const spreadsheetId = process.env.SPREADSHEET_ID;
-    console.log("[SHEET] Spreadsheet ID:", spreadsheetId.substring(0, 10) + "...");
-
-    let auth;
-    try {
-      auth = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
-      console.log("[SHEET] Auth parsed, email:", auth.client_email);
-    } catch (err) {
-      console.error("[SHEET] JSON parse error:", err.message);
-      console.error("[SHEET] Secret length:", process.env.GOOGLE_SERVICE_ACCOUNT_JSON?.length || 0);
-      throw err;
-    }
-
+    let auth = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
     const doc = new GoogleSpreadsheet(spreadsheetId);
     await doc.useServiceAccountAuth(auth);
     await doc.loadInfo();
-    console.log("[SHEET] Doc loaded:", doc.title);
-
     const sheet = doc.sheetsByIndex[0];
     await sheet.addRow(row);
     console.log(`[SHEET] SUCCESS: Added ${row.Symbol}`);
   } catch (e) {
     console.error("[SHEET] FAIL:", e.message);
-    if (e.code) console.error("Error code:", e.code);
-    if (e.response?.data) console.error("Google response:", JSON.stringify(e.response.data));
   }
 }
 
-/* ================= DATA FETCH ================= */
-async function fetchCloses(symbol) {
+/* ================= DATA FETCH - Intraday ================= */
+async function fetchIntradayData(symbol) {
   try {
     const plain = symbol.replace('.NS', '');
-    console.log(`Fetching ${plain}`);
-
-    const to = Math.floor(Date.now() / 1000);
-    const from = to - (90 * 24 * 60 * 60);
-
-    const history = await yahoo.historical(symbol, {
-      period1: from,
-      period2: to,
-      interval: "1d"
-    });
-
-    if (!history || history.length < 40) {
-      console.log(`No enough data ${plain} (${history?.length || 0})`);
-      return [];
+    console.log(`Fetching intraday 5m for ${plain}`);
+    
+    const queryOptions = {
+      period1: Math.floor((Date.now() - 10 * 24 * 60 * 60 * 1000) / 1000),
+      period2: Math.floor(Date.now() / 1000),
+      interval: INTERVAL,
+      includePrePost: false
+    };
+    
+    const result = await yahoo.chart(symbol, queryOptions);
+    if (!result || !result.quotes || result.quotes.length < 50) {
+      console.log(`Insufficient data for ${plain} (${result?.quotes?.length || 0})`);
+      return null;
     }
-
-    const closes = history.map(day => day.close).filter(v => !isNaN(v));
-    console.log(`Got ${closes.length} closes for ${plain}`);
-    return closes;
+    
+    console.log(`Got ${result.quotes.length} bars for ${plain}`);
+    return result.quotes;
   } catch (e) {
-    console.error(`Fetch fail ${symbol}:`, e.message);
-    return [];
+    console.error(`Fetch fail ${symbol}: ${e.message}`);
+    return null;
   }
+}
+
+/* ================= INDICATORS ================= */
+function calculateIndicators(bars) {
+  if (bars.length < 50) return null;
+  
+  const closes = bars.map(b => b.close).filter(v => !isNaN(v));
+  const highs = bars.map(b => b.high);
+  const lows = bars.map(b => b.low);
+  const volumes = bars.map(b => b.volume || 0);
+  
+  const ema9 = EMA.calculate({ period: 9, values: closes });
+  const ema21 = EMA.calculate({ period: 21, values: closes });
+  const ema50 = EMA.calculate({ period: 50, values: closes });
+  
+  const rsi = RSI.calculate({ period: 14, values: closes });
+  
+  let cumTPV = 0;
+  let cumVol = 0;
+  const vwapValues = [];
+  for (let i = 0; i < bars.length; i++) {
+    const tp = (highs[i] + lows[i] + closes[i]) / 3;
+    cumTPV += tp * volumes[i];
+    cumVol += volumes[i];
+    vwapValues.push(cumVol > 0 ? cumTPV / cumVol : closes[i]);
+  }
+  
+  return {
+    ema9: ema9[ema9.length - 1],
+    ema21: ema21[ema21.length - 1],
+    ema50: ema50[ema50.length - 1],
+    prevEma9: ema9[ema9.length - 2],
+    prevEma21: ema21[ema21.length - 2],
+    rsi: rsi[rsi.length - 1],
+    vwap: vwapValues[vwapValues.length - 1],
+    currentPrice: closes[closes.length - 1],
+    currentVolume: volumes[volumes.length - 1]
+  };
 }
 
 /* ================= CONFIDENCE ================= */
-function confidence(ema9, ema21, rsi) {
+function calculateConfidence(ind, direction) {
   let score = 0;
-  if (ema9 > ema21) score += 40;
-  if (rsi > 55 && rsi < 70) score += 30;
-  if (rsi > 50) score += 30;
+  if (direction === "BUY") {
+    if (ind.ema9 > ind.ema21) score += 30;
+    if (ind.ema21 > ind.ema50) score += 20;
+    if (ind.currentPrice > ind.vwap) score += 25;
+    if (ind.rsi > 52 && ind.rsi < 72) score += 25;
+  } else {
+    if (ind.ema9 < ind.ema21) score += 30;
+    if (ind.ema21 < ind.ema50) score += 20;
+    if (ind.currentPrice < ind.vwap) score += 25;
+    if (ind.rsi < 48 && ind.rsi > 28) score += 25;
+  }
   return score;
 }
 
@@ -163,70 +197,68 @@ async function run() {
     console.log("Market closed, skipping");
     return;
   }
-
-  console.log(`Scan start - ${SYMBOLS.length} symbols`);
-
+  
+  console.log(`Scan start - ${SYMBOLS.length} symbols (5m intraday)`);
+  
   for (const sym of SYMBOLS) {
     const plainSym = sym.replace('.NS', '');
-
     try {
       await sleep(DELAY_MS);
-      const closes = await fetchCloses(sym);
-      if (closes.length < 40) continue;
-
-      const ema9   = EMA.calculate({ period: 9, values: closes }).at(-1);
-      const ema21  = EMA.calculate({ period: 21, values: closes }).at(-1);
-      const prev9  = EMA.calculate({ period: 9, values: closes.slice(0, -1) }).at(-1);
-      const prev21 = EMA.calculate({ period: 21, values: closes.slice(0, -1) }).at(-1);
-      const rsi    = RSI.calculate({ period: 14, values: closes }).at(-1);
-
-      if (!ema9 || !ema21 || !prev9 || !prev21 || !rsi) continue;
-
-      const crossover = prev9 <= prev21 && ema9 > ema21;
-      if (!crossover || rsi < 50) continue;
-
-      const conf = confidence(ema9, ema21, rsi);
+      
+      const bars = await fetchIntradayData(sym);
+      if (!bars) continue;
+      
+      const ind = calculateIndicators(bars);
+      if (!ind) continue;
+      
+      const buyCross = ind.prevEma9 <= ind.prevEma21 && ind.ema9 > ind.ema21;
+      const sellCross = ind.prevEma9 >= ind.prevEma21 && ind.ema9 < ind.ema21;
+      
+      let direction = null;
+      if (buyCross && ind.rsi > 52 && ind.currentPrice > ind.vwap && ind.ema21 > ind.ema50) {
+        direction = "BUY";
+      } else if (sellCross && ind.rsi < 48 && ind.currentPrice < ind.vwap && ind.ema21 < ind.ema50) {
+        direction = "SELL";
+      }
+      
+      if (!direction) continue;
+      
+      const conf = calculateConfidence(ind, direction);
       if (conf < MIN_CONFIDENCE) continue;
-
+      
       if (cooldown.has(plainSym) && Date.now() - cooldown.get(plainSym) < COOLDOWN_MINUTES * 60000) {
         console.log(`Cooldown: ${plainSym}`);
         continue;
       }
-
+      
       cooldown.set(plainSym, Date.now());
-
-      const entry  = closes.at(-1);
-      const sl     = entry * (1 - SL_PCT / 100);
-      const target = entry * (1 + TARGET_PCT / 100);
-
-      // Improved Telegram message
-      const riskReward = ((target - entry) / (entry - sl)).toFixed(2);
+      
+      const entry = ind.currentPrice;
+      const sl = direction === "BUY" ? entry * (1 - SL_PCT / 100) : entry * (1 + SL_PCT / 100);
+      const target = direction === "BUY" ? entry * (1 + TARGET_PCT / 100) : entry * (1 - TARGET_PCT / 100);
+      const riskReward = Math.abs((target - entry) / (entry - sl)).toFixed(2);
+      
+      const emoji = direction === "BUY" ? "📈" : "📉";
+      const action = direction === "BUY" ? "BUY" : "SELL";
       const msg = `
-📈 *BUY SIGNAL ALERT* 📈
-
-**${plainSym}**  
-Current Price: *${entry.toFixed(2)}*  
-
-🎯 Target: *${target.toFixed(2)}*  
-🛑 Stop Loss: *${sl.toFixed(2)}*  
-
-Risk:Reward Ratio → **1 : ${riskReward}**  
-Confidence Level: **${conf}/100** 🔥  
-
-Signal Reason: EMA9 crossed above EMA21 + RSI showing bullish momentum  
-
+${emoji} *${action} SIGNAL ALERT* ${emoji}
+**${plainSym}**
+Current Price: *${entry.toFixed(2)}*
+🎯 Target: *${target.toFixed(2)}*
+🛑 Stop Loss: *${sl.toFixed(2)}*
+Risk:Reward → **1 : ${riskReward}**
+Confidence: **${conf}/100** 🔥
+Reason: EMA9 crossed ${direction === "BUY" ? "above" : "below"} EMA21 | EMA21 ${direction === "BUY" ? ">" : "<"} EMA50 | Price ${direction === "BUY" ? ">" : "<"} VWAP | RSI momentum
 Time (IST): ${new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "short", timeStyle: "short" })}
-
 ⚠️ Trade at your own risk – Not financial advice!
       `.trim();
-
+      
       await sendTelegram(msg);
-
-      // Updated row for Google Sheet (A & I columns fill avuthayi)
+      
       await logToSheet({
         TimeIST: new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "short", timeStyle: "short" }),
         Symbol: plainSym,
-        Direction: "BUY",
+        Direction: action,
         EntryPrice: entry,
         Target: target,
         StopLoss: sl,
@@ -234,14 +266,12 @@ Time (IST): ${new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dat
         Confidence: conf,
         RawTimeUTC: new Date().toISOString()
       });
-
-      console.log(`Alert sent: ${plainSym} (Conf ${conf})`);
-
+      
+      console.log(`Alert sent: ${plainSym} ${action} (Conf ${conf})`);
     } catch (e) {
-      console.error(`Error ${plainSym}:`, e.message);
+      console.error(`Error ${plainSym}: ${e.message}`);
     }
   }
-
   console.log("Scan complete!");
 }
 
