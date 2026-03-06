@@ -1,5 +1,6 @@
 /**
  * NSE EMA Scanner – BUY ONLY VERSION
+ * File: src/index.js
  * Intraday 5m | EMA9/21/50 | VWAP (daily reset) | ATR SL+Target | Volume | ORB | Candle Confirm
  *
  * ── ORIGINAL FIXES (v2) ────────────────────────────────────────────────────
@@ -34,6 +35,8 @@ const ATR_SL_MULTIPLIER  = 1.5;   // SL     = entry - (ATR × 1.5)
 const ATR_TGT_MULTIPLIER = 3.0;   // Target = entry + (ATR × 3.0) → guaranteed 1:2 R:R
 const VOLUME_SURGE_X     = 1.2;   // Volume must be >= 1.2x the 20-bar average
 const ORB_MINUTES        = 15;    // Opening range = first 15 minutes (9:15–9:30 IST)
+// Cooldown file lives at repo root (not inside src/) so GitHub Actions
+// cache can read/write it regardless of working directory
 const COOLDOWN_FILE      = "./cooldown_state.json";
 
 /* ================= SYMBOLS - Full Nifty 100 ================= */
