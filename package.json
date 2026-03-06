@@ -3,10 +3,10 @@
   "version": "3.0.0",
   "type": "module",
 
-  "main": "nse-ema-scanner.mjs",
+  "main": "src/index.js",
   "scripts": {
-    "start": "node nse-ema-scanner.mjs",
-    "dev":   "node --watch nse-ema-scanner.mjs"
+    "start": "node src/index.js",
+    "dev":   "node --watch src/index.js"
   },
 
   "engines": {
