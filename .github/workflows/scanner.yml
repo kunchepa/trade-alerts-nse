@@ -94,10 +94,9 @@ jobs:
           echo "✅ Within scanner window. Proceeding."
 
       # ── 6. Run the scanner ────────────────────────────────────────────────────
-      # FIX: Path corrected to match actual file location and extension.
-      # Change this path if your file is named differently (e.g. src/index.js).
+      # Path matches repo structure: src/index.js
       - name: Run NSE EMA Scanner
-        run: node nse-ema-scanner.mjs
+        run: node src/index.js
         env:
           TELEGRAM_BOT_TOKEN:          ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:            ${{ secrets.TELEGRAM_CHAT_ID }}
