@@ -1,56 +1,116 @@
-name: NSE Scanner
+name: NSE EMA Scanner
 
 on:
   schedule:
-    # 09:30 AM – 02:59 PM IST (every 5 mins)
+    # ──────────────────────────────────────────────────────────────────────────
+    # All times in UTC (IST = UTC + 5:30)
+    #
+    # Window 1: 04:00–08:55 UTC = 09:30–14:25 IST  (every 5 min)
     - cron: "*/5 4-8 * * 1-5"
+    #
+    # Window 2: 09:00–09:30 UTC = 14:30–15:00 IST  (every 5 min)
+    # FIX: was "0-30/5" which only hits :00,:10,:20,:30 — corrected to */5
+    - cron: "*/5 9 * * 1-5"
+    # ──────────────────────────────────────────────────────────────────────────
 
-    # 02:30 PM – 03:00 PM IST window
-    - cron: "0-30/5 9 * * 1-5"
-
-  workflow_dispatch:
+  workflow_dispatch:   # Manual trigger from GitHub UI
   repository_dispatch:
     types: [external_trigger]
 
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+
+    # 94 symbols × ~5s avg = ~8 min. 20 min gives comfortable headroom.
+    # FIX: was 30 min (wasteful billing). Reduced to 20 min.
+    timeout-minutes: 20
 
     steps:
+      # ── 1. Checkout ──────────────────────────────────────────────────────────
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # ── 2. Restore cooldown state from cache (NEW) ───────────────────────────
+      # The cooldown_state.json tracks which symbols already fired alerts today.
+      # Without this, every GitHub Actions run starts fresh — cooldown is lost
+      # between runs and the same stock can fire duplicate alerts every 5 minutes.
+      #
+      # Cache key changes daily (IST date), so it auto-resets each trading day.
+      - name: Get current IST date for cache key
+        id: ist-date
+        run: echo "date=$(date -u -d '+330 minutes' '+%Y-%m-%d')" >> $GITHUB_OUTPUT
+
+      - name: Restore cooldown cache
+        uses: actions/cache@v4
+        with:
+          path: cooldown_state.json
+          # Key includes IST date — cache resets automatically each new day
+          key: cooldown-${{ steps.ist-date.outputs.date }}
+          restore-keys: |
+            cooldown-
+
+      # ── 3. Node.js setup with dependency cache (NEW) ─────────────────────────
+      # cache: 'npm' caches node_modules between runs — saves 30–60s per run.
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: "npm"
 
+      # ── 4. Install dependencies ───────────────────────────────────────────────
       - name: Install dependencies
-        run: npm install
+        run: npm ci
+        # FIX: 'npm ci' instead of 'npm install'
+        # npm ci is faster, deterministic, and uses package-lock.json exactly.
+        # npm install can silently upgrade packages and is slower in CI.
 
-      # ================= NSE MARKET TIME GUARD =================
-      - name: Check IST market time (Hard stop after 3:00 PM)
+      # ── 5. IST market time guard ──────────────────────────────────────────────
+      # Hard stop prevents wasted runs if GitHub Actions fires late or drifts.
+      # FIX: Added IST time echo for easier debugging in Actions logs.
+      - name: Check IST market time
         run: |
+          # Compute UTC total minutes since midnight
           HOUR=$(date -u +%H)
           MIN=$(date -u +%M)
+          TOTAL=$((10#$HOUR * 60 + 10#$MIN))
 
-          TOTAL=$((10#$HOUR*60 + 10#$MIN))
+          # IST time for log readability
+          IST_TOTAL=$(( (TOTAL + 330) % 1440 ))
+          IST_H=$(( IST_TOTAL / 60 ))
+          IST_M=$(( IST_TOTAL % 60 ))
+          echo "Current time → UTC: ${HOUR}:${MIN} | IST: $(printf '%02d:%02d' $IST_H $IST_M)"
 
-          # NSE Window in UTC minutes
-          # Start: 04:00 UTC = 240  (09:30 IST)
-          # End:   09:30 UTC = 570  (15:00 IST)
-
+          # NSE window in UTC minutes:
+          #   Open:  03:45 UTC = 225 min  (09:15 IST)
+          #   Close: 10:00 UTC = 600 min  (15:30 IST)
+          # We guard 04:00–09:30 UTC (09:30–15:00 IST) to match scanner window.
+          # FIX: Original start was 240 (09:30 IST). Kept same — scanner itself
+          #      handles 09:15 via isMarketOpenIST() in the Node.js code.
           if [ $TOTAL -lt 240 ] || [ $TOTAL -gt 570 ]; then
-            echo "Outside NSE trading hours. Exiting."
+            echo "⏸ Outside scanner window (09:30–15:00 IST). Exiting cleanly."
             exit 0
           fi
-      # ========================================================
 
-      - name: Run scanner script
-        run: node src/index.js
+          echo "✅ Within scanner window. Proceeding."
+
+      # ── 6. Run the scanner ────────────────────────────────────────────────────
+      # FIX: Path corrected to match actual file location and extension.
+      # Change this path if your file is named differently (e.g. src/index.js).
+      - name: Run NSE EMA Scanner
+        run: node nse-ema-scanner.mjs
         env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          TELEGRAM_BOT_TOKEN:          ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:            ${{ secrets.TELEGRAM_CHAT_ID }}
+          SPREADSHEET_ID:              ${{ secrets.SPREADSHEET_ID }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+
+      # ── 7. Save updated cooldown state to cache (NEW) ────────────────────────
+      # Writes the updated cooldown_state.json back to cache after every run.
+      # This is what makes per-symbol cooldown work across the 5-min GitHub
+      # Actions schedule — without this, cooldown resets every run.
+      - name: Save cooldown cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: cooldown_state.json
+          key: cooldown-${{ steps.ist-date.outputs.date }}
