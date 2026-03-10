@@ -22,7 +22,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # ── 2. Get IST date for cache key ────────────────────────────────────────
+      # ── 2. Get IST date for cooldown cache key ────────────────────────────────
       - name: Get current IST date for cache key
         id: ist-date
         run: echo "date=$(date -u -d '+330 minutes' '+%Y-%m-%d')" >> $GITHUB_OUTPUT
@@ -36,56 +36,46 @@ jobs:
           restore-keys: |
             cooldown-
 
-      # ── 4. Setup Node.js ──────────────────────────────────────────────────────
-      # FIX 1: Removed cache:'npm' from here.
-      # cache:'npm' requires package-lock.json to already exist in the repo.
-      # Since there is no package-lock.json committed, this was the ROOT CAUSE
-      # of the "Dependencies lock file is not found" error that killed every run.
-      # Node caching is handled separately below (step 5) in a safe way.
+      # ── 4. Setup Node.js 22 ───────────────────────────────────────────────────
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
-      # ── 5. Cache node_modules manually ───────────────────────────────────────
-      # FIX 2: Safe npm cache that does NOT require package-lock.json.
-      # Uses package.json hash as cache key — changes when dependencies change.
-      # Falls back gracefully if no cache exists yet.
+      # ── 5. Cache node_modules ─────────────────────────────────────────────────
+      # FIX: Added -v3 suffix to cache key to BUST the old bad cache.
+      # The old cache had yahoo-finance2 v2 installed (wrong version).
+      # The new key forces a fresh install with the correct v3.
+      # After this first run rebuilds the cache, future runs will be fast again.
       - name: Cache node_modules
         id: npm-cache
         uses: actions/cache@v4
         with:
           path: node_modules
-          key: node-modules-${{ hashFiles('package.json') }}
+          key: node-modules-v3-${{ hashFiles('package.json') }}
           restore-keys: |
-            node-modules-
+            node-modules-v3-
 
       # ── 6. Install dependencies ───────────────────────────────────────────────
-      # FIX 3: Use 'npm install' instead of 'npm ci'.
-      # npm ci requires package-lock.json — npm install works without it.
-      # Also generates package-lock.json automatically for future runs.
+      # FIX: Removed the 'if: cache-hit != true' condition.
+      # Previously when old bad cache was restored, npm install was SKIPPED
+      # entirely because cache-hit = true. Wrong packages stayed installed.
+      # Now npm install always runs — it's fast when node_modules is cached
+      # because npm just verifies what's there, not re-downloads everything.
       - name: Install dependencies
-        if: steps.npm-cache.outputs.cache-hit != 'true'
         run: npm install
 
       # ── 7. Commit package-lock.json if newly generated ────────────────────────
-      # FIX 4: Auto-commits package-lock.json back to repo on first run.
-      # After this, future workflows will have the lock file available.
-      # This step is a no-op if package-lock.json already exists and is unchanged.
       - name: Commit package-lock.json if generated
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          if git diff --quiet HEAD -- package-lock.json 2>/dev/null || \
-             ! git ls-files --error-unmatch package-lock.json 2>/dev/null; then
-            if [ -f package-lock.json ]; then
-              git add package-lock.json
-              git diff --staged --quiet || git commit -m "ci: auto-add package-lock.json [skip ci]"
-              git push || echo "Push skipped (no changes or permission issue)"
-            fi
+          if [ -f package-lock.json ]; then
+            git add package-lock.json
+            git diff --staged --quiet || git commit -m "ci: auto-add package-lock.json [skip ci]"
+            git push || echo "Push skipped (no changes or no write permission)"
           fi
         continue-on-error: true
-        # continue-on-error: true — push failure never kills the scanner run
 
       # ── 8. IST market time guard ──────────────────────────────────────────────
       - name: Check IST market time
@@ -99,7 +89,6 @@ jobs:
           IST_M=$(( IST_TOTAL % 60 ))
           echo "Current time → UTC: ${HOUR}:${MIN} | IST: $(printf '%02d:%02d' $IST_H $IST_M)"
 
-          # 240 = 04:00 UTC = 09:30 IST | 570 = 09:30 UTC = 15:00 IST
           if [ $TOTAL -lt 240 ] || [ $TOTAL -gt 570 ]; then
             echo "⏸ Outside scanner window (09:30–15:00 IST). Exiting cleanly."
             exit 0
@@ -116,9 +105,6 @@ jobs:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
 
       # ── 10. Save cooldown cache ───────────────────────────────────────────────
-      # FIX 5: Guard added — only saves if cooldown_state.json actually exists.
-      # Previously this always ran and always warned "file does not exist"
-      # because the scanner hadn't run yet (job failed earlier at step 4).
       - name: Save cooldown cache
         if: always() && hashFiles('cooldown_state.json') != ''
         uses: actions/cache/save@v4
