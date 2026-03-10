@@ -46,7 +46,12 @@ const ORB_MINUTES        = 15;    // Opening range = first 15 minutes (9:15–9:
 const COOLDOWN_FILE      = "./cooldown_state.json";
 
 /* ================= SYMBOLS - Full Nifty 100 ================= */
-/* MINDTREE.NS removed — merged into LTIM.NS in 2023            */
+/* Removed broken symbols:
+ * MINDTREE.NS  - merged into LTIM in 2023
+ * TATAMOTORS.NS - Yahoo returns "no data found"
+ * LTIM.NS      - Yahoo returns 0 bars
+ * BAJAJCORP.NS - Yahoo schema validation fails (bad/missing data)
+ */
 const SYMBOLS = [
   "RELIANCE.NS",   "HDFCBANK.NS",   "BHARTIARTL.NS", "TCS.NS",        "SBIN.NS",
   "ICICIBANK.NS",  "INFY.NS",       "ITC.NS",        "HINDUNILVR.NS", "LT.NS",
@@ -54,19 +59,19 @@ const SYMBOLS = [
   "M&M.NS",        "ULTRACEMCO.NS", "NTPC.NS",       "ONGC.NS",       "POWERGRID.NS",
   "TITAN.NS",      "ADANIPORTS.NS", "ADANIENT.NS",   "BAJAJFINSV.NS", "INDUSINDBK.NS",
   "TECHM.NS",      "HCLTECH.NS",    "ASIANPAINT.NS", "NESTLEIND.NS",  "JSWSTEEL.NS",
-  "COALINDIA.NS",  "TATAMOTORS.NS", "BAJAJ-AUTO.NS", "TATASTEEL.NS",  "WIPRO.NS",
-  "HDFCLIFE.NS",   "SBILIFE.NS",    "HEROMOTOCO.NS", "DRREDDY.NS",    "CIPLA.NS",
-  "APOLLOHOSP.NS", "DIVISLAB.NS",   "BRITANNIA.NS",  "EICHERMOT.NS",  "GRASIM.NS",
-  "BPCL.NS",       "IOC.NS",        "TATACONSUM.NS", "UPL.NS",        "HINDALCO.NS",
-  "SHREECEM.NS",   "PIDILITIND.NS", "DABUR.NS",      "BOSCHLTD.NS",   "TVSMOTOR.NS",
-  "SIEMENS.NS",    "HAL.NS",        "BEL.NS",        "DLF.NS",        "INDIGO.NS",
-  "LTIM.NS",       "GODREJCP.NS",   "CHOLAFIN.NS",   "POLYCAB.NS",    "SRF.NS",
-  "CANBK.NS",      "PNB.NS",        "UNIONBANK.NS",  "BANKBARODA.NS", "IGL.NS",
-  "MGL.NS",        "TORNTPHARM.NS", "JSWENERGY.NS",  "ABB.NS",        "ACC.NS",
-  "VEDL.NS",       "TATAPOWER.NS",  "GAIL.NS",       "AUROPHARMA.NS", "BANDHANBNK.NS",
-  "IDFCFIRSTB.NS", "JINDALSTEL.NS", "ADANIGREEN.NS", "ADANIPOWER.NS", "COFORGE.NS",
-  "LTTS.NS",       "BAJAJCORP.NS",  "ICICIPRULI.NS", "SBICARD.NS",
-  "PAGEIND.NS",    "MUTHOOTFIN.NS", "TRENT.NS",      "MAXHEALTH.NS",  "ETERNAL.NS"
+  "COALINDIA.NS",  "BAJAJ-AUTO.NS", "TATASTEEL.NS",  "WIPRO.NS",      "HDFCLIFE.NS",
+  "SBILIFE.NS",    "HEROMOTOCO.NS", "DRREDDY.NS",    "CIPLA.NS",      "APOLLOHOSP.NS",
+  "DIVISLAB.NS",   "BRITANNIA.NS",  "EICHERMOT.NS",  "GRASIM.NS",     "BPCL.NS",
+  "IOC.NS",        "TATACONSUM.NS", "UPL.NS",        "HINDALCO.NS",   "SHREECEM.NS",
+  "PIDILITIND.NS", "DABUR.NS",      "BOSCHLTD.NS",   "TVSMOTOR.NS",   "SIEMENS.NS",
+  "HAL.NS",        "BEL.NS",        "DLF.NS",        "INDIGO.NS",     "GODREJCP.NS",
+  "CHOLAFIN.NS",   "POLYCAB.NS",    "SRF.NS",        "CANBK.NS",      "PNB.NS",
+  "UNIONBANK.NS",  "BANKBARODA.NS", "IGL.NS",        "MGL.NS",        "TORNTPHARM.NS",
+  "JSWENERGY.NS",  "ABB.NS",        "ACC.NS",        "VEDL.NS",       "TATAPOWER.NS",
+  "GAIL.NS",       "AUROPHARMA.NS", "BANDHANBNK.NS", "IDFCFIRSTB.NS", "JINDALSTEL.NS",
+  "ADANIGREEN.NS", "ADANIPOWER.NS", "COFORGE.NS",    "LTTS.NS",       "ICICIPRULI.NS",
+  "SBICARD.NS",    "PAGEIND.NS",    "MUTHOOTFIN.NS", "TRENT.NS",      "MAXHEALTH.NS",
+  "ETERNAL.NS"
 ];
 
 /* ================= ENV CHECK ================= */
