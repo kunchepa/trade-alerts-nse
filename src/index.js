@@ -22,8 +22,14 @@
 import fetch from "node-fetch";
 import { EMA, RSI, ATR } from "technicalindicators";
 import { GoogleSpreadsheet } from "google-spreadsheet";
-import yahooFinance from "yahoo-finance2";
+import YahooFinance from "yahoo-finance2";
 import fs from "fs";
+
+// FIX: yahoo-finance2 v3 exports the CLASS not a pre-made instance.
+// Calling yahooFinance.chart() on the class (not an instance) throws:
+// "Call `const yahooFinance = new YahooFinance()` first"
+// Must instantiate first. suppressNotices silences deprecation warnings.
+const yahooFinance = new YahooFinance({ suppressNotices: ["ripHistorical"] });
 
 /* ================= CONFIG ================= */
 const MIN_CONFIDENCE     = 70;    // Minimum confidence score to fire alert
