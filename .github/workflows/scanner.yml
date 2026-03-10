@@ -52,9 +52,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: node_modules
-          key: node-modules-v3-${{ hashFiles('package.json') }}
+          key: node-modules-v4-${{ hashFiles('package.json') }}
           restore-keys: |
-            node-modules-v3-
+            node-modules-v4-
 
       # ── 6. Install dependencies ───────────────────────────────────────────────
       # FIX: Removed the 'if: cache-hit != true' condition.
