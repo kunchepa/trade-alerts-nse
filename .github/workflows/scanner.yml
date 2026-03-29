@@ -1,13 +1,8 @@
-name: NSE EMA Scanner
+name: NSE Scanner
 
 on:
   schedule:
-    # All times UTC (IST = UTC + 5:30)
-    # Window 1: 04:00–08:55 UTC = 09:30–14:25 IST (every 5 min)
-    - cron: "*/5 4-8 * * 1-5"
-    # Window 2: 09:00–09:30 UTC = 14:30–15:00 IST (every 5 min)
-    - cron: "*/5 9 * * 1-5"
-
+    - cron: "*/5 4-10 * * 1-5"  # Mon-Fri ~9:30-15:30 IST approx
   workflow_dispatch:
   repository_dispatch:
     types: [external_trigger]
@@ -15,99 +10,24 @@ on:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
-      # ── 1. Checkout ──────────────────────────────────────────────────────────
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # ── 2. Get IST date for cooldown cache key ────────────────────────────────
-      - name: Get current IST date for cache key
-        id: ist-date
-        run: echo "date=$(date -u -d '+330 minutes' '+%Y-%m-%d')" >> $GITHUB_OUTPUT
-
-      # ── 3. Restore cooldown cache ─────────────────────────────────────────────
-      - name: Restore cooldown cache
-        uses: actions/cache@v4
-        with:
-          path: cooldown_state.json
-          key: cooldown-${{ steps.ist-date.outputs.date }}
-          restore-keys: |
-            cooldown-
-
-      # ── 4. Setup Node.js 22 ───────────────────────────────────────────────────
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
-      # ── 5. Cache node_modules ─────────────────────────────────────────────────
-      # FIX: Added -v3 suffix to cache key to BUST the old bad cache.
-      # The old cache had yahoo-finance2 v2 installed (wrong version).
-      # The new key forces a fresh install with the correct v3.
-      # After this first run rebuilds the cache, future runs will be fast again.
-      - name: Cache node_modules
-        id: npm-cache
-        uses: actions/cache@v4
-        with:
-          path: node_modules
-          key: node-modules-v4-${{ hashFiles('package.json') }}
-          restore-keys: |
-            node-modules-v4-
-
-      # ── 6. Install dependencies ───────────────────────────────────────────────
-      # FIX: Removed the 'if: cache-hit != true' condition.
-      # Previously when old bad cache was restored, npm install was SKIPPED
-      # entirely because cache-hit = true. Wrong packages stayed installed.
-      # Now npm install always runs — it's fast when node_modules is cached
-      # because npm just verifies what's there, not re-downloads everything.
       - name: Install dependencies
         run: npm install
 
-      # ── 7. Commit package-lock.json if newly generated ────────────────────────
-      - name: Commit package-lock.json if generated
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          if [ -f package-lock.json ]; then
-            git add package-lock.json
-            git diff --staged --quiet || git commit -m "ci: auto-add package-lock.json [skip ci]"
-            git push || echo "Push skipped (no changes or no write permission)"
-          fi
-        continue-on-error: true
-
-      # ── 8. IST market time guard ──────────────────────────────────────────────
-      - name: Check IST market time
-        run: |
-          HOUR=$(date -u +%H)
-          MIN=$(date -u +%M)
-          TOTAL=$((10#$HOUR * 60 + 10#$MIN))
-
-          IST_TOTAL=$(( (TOTAL + 330) % 1440 ))
-          IST_H=$(( IST_TOTAL / 60 ))
-          IST_M=$(( IST_TOTAL % 60 ))
-          echo "Current time → UTC: ${HOUR}:${MIN} | IST: $(printf '%02d:%02d' $IST_H $IST_M)"
-
-          if [ $TOTAL -lt 240 ] || [ $TOTAL -gt 570 ]; then
-            echo "⏸ Outside scanner window (09:30–15:00 IST). Exiting cleanly."
-            exit 0
-          fi
-          echo "✅ Within scanner window. Proceeding."
-
-      # ── 9. Run the scanner ────────────────────────────────────────────────────
-      - name: Run NSE EMA Scanner
+      - name: Run scanner script
         run: node src/index.js
         env:
-          TELEGRAM_BOT_TOKEN:          ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID:            ${{ secrets.TELEGRAM_CHAT_ID }}
-          SPREADSHEET_ID:              ${{ secrets.SPREADSHEET_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-
-      # ── 10. Save cooldown cache ───────────────────────────────────────────────
-      - name: Save cooldown cache
-        if: always() && hashFiles('cooldown_state.json') != ''
-        uses: actions/cache/save@v4
-        with:
-          path: cooldown_state.json
-          key: cooldown-${{ steps.ist-date.outputs.date }}
